@@ -18,7 +18,7 @@ A high-performance JSON storage server with real-time synchronization capabiliti
 
 ### Node.js Client
 ```bash
-npm install deepjson-client
+npm install deepjson-connector
 ```
 
 ### Browser Client
