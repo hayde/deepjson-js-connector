@@ -1,7 +1,7 @@
 const path = require('path');
 
 module.exports = {
-  entry: './src/deepjson-connector.js',
+  entry: './dist/deepjson-connector.js',
   mode: 'production',
   output: {
     path: path.resolve(__dirname, 'dist'),
