@@ -12,12 +12,13 @@
         const axios = require('axios');
         const FormData = require('form-data');
         const io = require('socket.io-client');
-        module.exports = factory(axios, FormData, io);
+        const fs = require('fs');
+        module.exports = factory(axios, FormData, io, fs);
     } else {
         // Browser global
         root.DeepJSONConnector = factory(root.axios, root.FormData, root.io);
     }
-}(typeof self !== 'undefined' ? self : this, function(axios, FormData, io) {
+}(typeof self !== 'undefined' ? self : this, function(axios, FormData, io, fs) {
 
 class DeepJSONConnector {
     constructor(config) {
@@ -127,10 +128,13 @@ class DeepJSONConnector {
         let form;
         if (this.isNode) {
             // Node.js FormData with streams
+            const stream = fs.createReadStream(file);
+            const stats = fs.statSync(file);
+
             form = new FormData();
-            form.append('file', file.stream(), {
+            form.append('file', stream, {
                 filename: file.name,
-                knownLength: file.size
+                size: stats.size
             });
         } else {
             // Browser FormData
@@ -146,9 +150,9 @@ class DeepJSONConnector {
         return this._request('POST', `/keys/${key}`, null, form, { headers });
     }
 
-    // Admin methods
+    // key list methods
     async listKeys( filters ) {
-        return this._request('GET', '/admin/keys', filters );
+        return this._request('GET', '/cmd/keys', filters, null, {} );
     }
 
     // Private methods
@@ -175,6 +179,8 @@ class DeepJSONConnector {
             }
             this._resetFlags();
 
+            var url = this.axios.getUri(requestConfig);
+            console.log( url );
             const response = await this.axios(requestConfig);
             return response.data;
         } catch (error) {
@@ -337,7 +343,7 @@ class DeepJSONSyncConnector extends DeepJSONConnector {
 
 // Export as main object with aliases
 const Exports = {
-    DeepJsonConnector: DeepJSONConnector,          // Main export
+    Connector: DeepJSONConnector,          // Main export
     Sync: DeepJSONSyncConnector,           // Alias for sync version
     DeepJSONConnector: DeepJSONConnector,  // Preserve original name
     DeepJSONSyncConnector: DeepJSONSyncConnector
