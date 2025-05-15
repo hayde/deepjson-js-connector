@@ -15,8 +15,16 @@
         const fs = require('fs');
         module.exports = factory(axios, FormData, io, fs);
     } else {
-        // Browser global
-        root.DeepJSONConnector = factory(root.axios, root.FormData, root.io);
+        // Browser global - attach directly to window
+        const ex = factory(
+            root.axios,
+            root.FormData,
+            root.io
+        );
+        root.Connector = ex.Connector;
+        root.SyncConnector = ex.SyncConnector;
+        root.DeepJSONConnector = ex.Connector;
+        root.DeepJSONSyncConnector = ex.SyncConnector;
     }
 }(typeof self !== 'undefined' ? self : this, function(axios, FormData, io, fs) {
 
@@ -341,13 +349,10 @@ class DeepJSONSyncConnector extends DeepJSONConnector {
     }
 }
 
-// Export as main object with aliases
-const Exports = {
-    Connector: DeepJSONConnector,          // Main export
-    Sync: DeepJSONSyncConnector,           // Alias for sync version
-    DeepJSONConnector: DeepJSONConnector,  // Preserve original name
+return {
+    Connector: DeepJSONConnector,
+    SyncConnector: DeepJSONSyncConnector,
+    DeepJSONConnector: DeepJSONConnector,
     DeepJSONSyncConnector: DeepJSONSyncConnector
 };
-
-return Exports;
 }));

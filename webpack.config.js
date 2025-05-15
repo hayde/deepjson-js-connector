@@ -5,7 +5,7 @@ module.exports = {
   mode: 'production',
   output: {
     path: path.resolve(__dirname, 'dist'),
-    filename: 'deepjson-connctor.min.js',
+    filename: 'deepjson-connector.min.js',
     library: {
         name: 'DeepJsonConnector',
         type: 'umd',
