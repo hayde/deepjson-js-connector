@@ -37,7 +37,6 @@ class DeepJSONConnector {
         // transmition options
         this.binary = false;
         this.overwriteKey = false;
-        this.getBody = false;
         
         // Platform detection
         this.isNode = typeof process !== 'undefined' && process.versions?.node;
@@ -82,20 +81,12 @@ class DeepJSONConnector {
         this.overwriteKey = true_or_false;
         return this;
     }
-    hasGetBody() {
-        return this.getBody;
-    }
-    setGetBody( true_or_false ) {
-        this.getBody = true_or_false;
-        return this;
-    }
-
     // Core CRUD operations
-    async get(key, value = '', script = undefined) {
+    async get(key, value = undefined, script = undefined) {
         const headers = {};
-        const params = {}
+        const params = {};
         let httpMethod = "GET";
-        if (this.getBody) {
+        if (value || script) {
             // here we 
             headers['X-Method-Override'] = "GET";
             httpMethod = "POST";
@@ -208,7 +199,7 @@ class DeepJSONConnector {
     async _request( config ) {
         //method, path, params = null,  data = null, config = {}) {
         if( config.script && config.script.length > 0 ) {
-            data = "javascript:\n" + config.script + "\n\njavascript!\n\n" + data;
+            config.data = "javascript:\n" + config.script + "\n\njavascript!\n\n" + (config.data || '');
         }
         try {
             const requestConfig = {
@@ -244,7 +235,6 @@ class DeepJSONConnector {
     _resetFlags() {
         this.binary = false;
         this.overwriteKey = false;
-        this.getBody = false;
     }
 
     _handleError(error) {
