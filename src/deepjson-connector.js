@@ -150,8 +150,9 @@
             return this._request({
                 method: 'POST',
                 uri: `/cmd/move`,
-                data: JSON.stringify(value),
-                header: headers
+                params: {},
+                data: value,
+                headers: headers
             });
         }
 
