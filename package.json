@@ -1,6 +1,6 @@
 {
     "name": "deepjson-connector",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "description": "Official connector for DeepJSON Server - JSON storage with real-time sync",
     "main": "lib/index.js",
     "browser": "dist/deepjson-connector.min.js",
