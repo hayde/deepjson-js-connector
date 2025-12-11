@@ -1,6 +1,3 @@
-Here's a comprehensive `README.md` for your DeepJSON project:
-
-```markdown
 # DeepJSON Server & Client
 
 A high-performance JSON storage server with real-time synchronization capabilities and secure scripting support.
