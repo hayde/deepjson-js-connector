@@ -1,6 +1,6 @@
 {
     "name": "deepjson-connector",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "description": "Official connector for DeepJSON Server - JSON storage with real-time sync",
     "main": "lib/index.js",
     "browser": "dist/deepjson-connector.min.js",
@@ -27,7 +27,7 @@
     },
     "devDependencies": {
         "mocha": "^10.2.0",
-        "webpack": "^5.88.2",
+        "webpack": "~>5.104.1",
         "webpack-cli": "^5.1.4"
     }
 }

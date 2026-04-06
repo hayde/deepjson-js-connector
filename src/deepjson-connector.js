@@ -137,7 +137,7 @@
                 method: 'DELETE',
                 uri: `/keys/${key}`,
                 query: null,
-                data: value,
+                data: null,
                 headers: headers,
                 script: null
             });
@@ -150,7 +150,7 @@
             return this._request({
                 method: 'POST',
                 uri: `/cmd/move`,
-                params: {},
+                query: {},
                 data: value,
                 headers: headers
             });
@@ -184,7 +184,7 @@
                 method: 'POST',
                 uri: `/keys/${key}`,
                 data: form,
-                header: headers
+                headers: headers
             });
         }
 
