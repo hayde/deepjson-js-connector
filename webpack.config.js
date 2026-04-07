@@ -41,7 +41,7 @@ module.exports = [
       filename: 'index.mjs',
       library: { type: 'module' },
     },
-    optimization: { minimize: false },
+    optimization: { minimize: false, mangleExports: false, },
     externals: {
       'axios':            'axios',
       'form-data':        'form-data',
@@ -73,4 +73,21 @@ module.exports = [
     },
   },
 
+    // 4. In webpack.config.js, add this fourth entry to the exports array:
+    {
+        name: 'browser-esm',
+        entry: './src/deepjson-connector.js',
+        mode: 'production',
+        target: 'web',
+        experiments: { outputModule: true },
+        output: {
+            path: path.resolve(__dirname, 'dist'),
+            filename: 'deepjson-connector.esm.js',  // ← this is the file the browser loads
+            library: { type: 'module' },
+        },
+        optimization: { 
+            minimize: true,
+            mangleExports: false, },
+    // NO externals — axios, socket.io-client bundled in
+    },
 ];
