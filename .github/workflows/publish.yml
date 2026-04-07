@@ -1,17 +1,35 @@
-name: Publish
+name: Publish to npm
+
 on:
   push:
     tags:
       - 'v*'
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read        # only needs to read the repo
+
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4   # v3 is approaching EOL
+
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18
-      - run: npm ci
-      - run: npm publish
+          node-version: 20          # Node 18 reaches EOL Sept 2025; use 20 LTS
+          registry-url: 'https://registry.npmjs.org'
+          # registry-url is required — without it NODE_AUTH_TOKEN has no effect
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build all targets
+        run: npm run build
+
+      - name: Verify package contents
+        run: npm pack --dry-run     # prints what will be included; catches missing files early
+
+      - name: Publish
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

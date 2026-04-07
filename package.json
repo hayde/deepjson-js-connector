@@ -1,33 +1,50 @@
 {
-    "name": "deepjson-connector",
-    "version": "1.0.9",
-    "description": "Official connector for DeepJSON Server - JSON storage with real-time sync",
-    "main": "lib/index.js",
-    "browser": "dist/deepjson-connector.min.js",
-    "scripts": {
-        "build": "webpack --config webpack.config.js",
-        "prepublishOnly": "npm run build"
-    },
-    "keywords": [
-        "json",
-        "database",
-        "realtime",
-        "sync",
-        "storage",
-        "connector",
-        "key-value",
-        "channel"
-    ],
-    "author": "cn.sntrk",
-    "license": "GPL-3.0-only",
-    "dependencies": {
-        "axios": "~>1.12.0",
-        "form-data": "~>4.0.4",
-        "socket.io-client": "^4.7.2"
-    },
-    "devDependencies": {
-        "mocha": "^10.2.0",
-        "webpack": "~>5.104.1",
-        "webpack-cli": "^5.1.4"
+  "name": "deepjson-connector",
+  "version": "1.1.0",
+  "description": "Official connector for DeepJSON Server - JSON storage with real-time sync",
+  "main": "lib/index.cjs",
+  "module": "lib/index.mjs",
+  "browser": "dist/deepjson-connector.min.js",
+  "types": "types/index.d.ts",
+  "exports": {
+    ".": {
+      "import":  "./lib/index.mjs",
+      "require": "./lib/index.cjs",
+      "browser": "./dist/deepjson-connector.min.js",
+      "default": "./lib/index.cjs"
     }
+  },
+  "files": [
+    "lib/",
+    "dist/",
+    "types/",
+    "src/"
+  ],
+  "scripts": {
+    "build": "webpack --config webpack.config.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "json", "database", "realtime", "sync",
+    "storage", "connector", "key-value", "channel"
+  ],
+  "author": "cn.sntrk",
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    "axios": "^1.12.0",
+    "form-data": "^4.0.4",
+    "socket.io-client": "^4.7.2"
+  },
+  "devDependencies": {
+    "mocha": "^10.2.0",
+    "webpack": "^5.104.1",
+    "webpack-cli": "^5.1.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/senturk/deepjson-connector.git"
+  },
+  "bugs": {
+    "url": "https://github.com/senturk/deepjson-connector/issues"
+  }
 }
