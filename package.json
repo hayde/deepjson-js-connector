@@ -1,6 +1,6 @@
 {
   "name": "deepjson-connector",
-  "version": "1.2.0",
+  "version": "1.2.2",
   "description": "Official connector for DeepJSON Server - JSON storage with real-time sync",
   "main": "lib/index.cjs",
   "module": "lib/index.mjs",
@@ -42,9 +42,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/senturk/deepjson-connector.git"
+    "url": "git+https://github.com/hayde/deepjson-js-connector.git"
   },
   "bugs": {
-    "url": "https://github.com/senturk/deepjson-connector/issues"
+    "url": "https://github.com/hayde/deepjson-js-connector.git/issues"
   }
 }
