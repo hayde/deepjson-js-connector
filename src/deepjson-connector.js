@@ -235,6 +235,10 @@
                     data: config.data
                 };
 
+                if (config.query?.binary) {
+                    requestConfig.responseType = 'arraybuffer';
+                }
+
                 // Handle FormData in browser
                 if (!this.isNode && config.data instanceof FormData) {
                     requestConfig.data = config.data;
