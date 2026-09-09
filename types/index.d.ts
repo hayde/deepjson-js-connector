@@ -5,6 +5,12 @@ export interface ClientConfig {
   token?:   string | null;
   storage?: 'memory' | string;
   timeout?: number;
+  /**
+   * Called with the fresh token whenever the server renews the session via the
+   * `X-Renewed-Token` response header. The connector already stores the new
+   * token itself; use this hook to persist it (localStorage, keychain, ...).
+   */
+  onTokenRenewed?: (token: string) => void;
 }
 
 export interface AuthResponse {
@@ -26,6 +32,8 @@ export class Connector {
   // Auth
   login(username: string, password: string): Promise<AuthResponse>;
   getToken(): string | null;
+  /** Restores a previously persisted token for subsequent requests. */
+  setToken(token: string | null): this;
 
   // Flags (chainable setters)
   isBinary(): boolean;
