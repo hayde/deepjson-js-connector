@@ -79,8 +79,43 @@ try {
 }
 
 // Manual token handling (for existing sessions)
-dj.token = 'eyJhbGciOiJIUzI1NiIsInR5c...';
+dj.setToken('eyJhbGciOiJIUzI1NiIsInR5c...');
 ```
+
+#### Sliding session (token renewal)
+
+Tokens are valid for one hour from the moment they are issued. A JWT carries its
+expiry inside the signed payload, so an existing token cannot be extended — the
+server instead issues a **new** token on every successful authenticated response
+and returns it in the `X-Renewed-Token` header.
+
+The connector picks that header up automatically for every request and replaces
+its stored token, so an actively used session never expires. Nothing needs to be
+done per call. To persist the renewed token outside of memory, pass the
+`onTokenRenewed` callback:
+
+```javascript
+const dj = new Connector({
+  baseURL: 'http://localhost:3000',
+  token: localStorage.getItem('dj_token'),      // restore a previous session
+  onTokenRenewed: (token) => {                  // keep it fresh
+    localStorage.setItem('dj_token', token);
+  }
+});
+```
+
+Notes:
+
+- The header is **not** sent on the login response (the first token comes from
+  the `token` field of its body), not on `401` responses, and not for HMAC
+  device authentication — those clients use no JWTs at all.
+- In the browser the server must expose the header via
+  `Access-Control-Expose-Headers: X-Renewed-Token` for cross-origin requests,
+  otherwise the response header is invisible to JavaScript.
+- A `socket.io` connection is only authenticated once, during the handshake.
+  `SyncConnector` keeps the handshake token up to date with each renewal, but a
+  connection open for more than an hour without any intervening HTTP request has
+  to be re-established via `reconnect()`.
 
 __Example Error Handling:__
 
@@ -241,6 +276,8 @@ const safeScript = await dj.post('scripts/clean-data', {
 | `.move(from, to)`   | Move data between keys         |
 | `.sync()`           | Real-time operations            |
 | `.listKeys(regEx)`  | list keys            |
+| `.getToken()`       | current JWT (auto-renewed)      |
+| `.setToken(token)`  | restore a persisted JWT         |
 
 
 ## License

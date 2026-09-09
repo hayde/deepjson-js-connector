@@ -41,6 +41,11 @@
             // Platform detectionk
             this.isNode = typeof process !== 'undefined' && process.versions?.node;
 
+            // Called with the fresh token whenever the server renews it (sliding session)
+            this.onTokenRenewed = typeof config.onTokenRenewed === 'function'
+                ? config.onTokenRenewed
+                : null;
+
             // Configure axios instance
             this.axios = axios.create({
                 baseURL: this.baseURL,
@@ -50,13 +55,26 @@
                     'User-Agent': 'DeepJSONConnector/1.0'
                 }
             });
+
+            // Sliding session: every authenticated response carries the token for
+            // the next request in X-Renewed-Token. Picking it up centrally keeps
+            // every endpoint (and the socket handshake) on the freshest token.
+            this.axios.interceptors.response.use(
+                (response) => {
+                    this._applyRenewedToken(response);
+                    return response;
+                },
+                (error) => Promise.reject(error)
+            );
         }
 
         // Authentication methods
         async login(username, password) {
             try {
                 const response = await this.axios.post('auth/login', { username, password });
-                this.token = response.data.token;
+                // The login response never carries X-Renewed-Token - the very first
+                // token comes exclusively from the token field of its body.
+                this.setToken(response.data.token);
                 return response.data;
             } catch (error) {
                 this._handleError(error);
@@ -65,6 +83,13 @@
 
         getToken() {
             return this.token;
+        }
+
+        // Sets the token used for subsequent requests. Use it to restore a token
+        // that was persisted by the host application.
+        setToken(token) {
+            this.token = token || null;
+            return this;
         }
 
         isBinary() {
@@ -263,6 +288,28 @@
             this.overwriteKey = false;
         }
 
+        // Adopts the token the server issued for the next request, if any.
+        // Absent on the login response, on 401s and on HMAC device requests.
+        _applyRenewedToken(response) {
+            const headers = response && response.headers;
+            if (!headers) return;
+
+            const renewed = typeof headers.get === 'function'
+                ? headers.get('x-renewed-token')
+                : (headers['x-renewed-token'] || headers['X-Renewed-Token']);
+
+            if (!renewed || renewed === this.token) return;
+
+            this.setToken(renewed);
+            if (this.onTokenRenewed) {
+                try {
+                    this.onTokenRenewed(renewed);
+                } catch (e) {
+                    // A failing consumer callback must never break the request.
+                }
+            }
+        }
+
         _handleError(error) {
             if (error.response) {
                 const err = new Error(`API Error: ${error.response.status} ${error.response.statusText}`);
@@ -399,11 +446,21 @@
             });
         }
 
+        // Override setToken so a renewed token also reaches the socket handshake:
+        // socket.io reuses opts.query on its own reconnect attempts, and an open
+        // connection is only authenticated once, when it is established.
+        setToken(token) {
+            super.setToken(token);
+            if (this.socket && this.socket.io && this.socket.io.opts.query) {
+                this.socket.io.opts.query.token = this.token;
+            }
+            return this;
+        }
+
         // Override login to handle socket reauthentication
         async login(username, password) {
             const result = await super.login(username, password);
             if (this.socket) {
-                this.socket.io.opts.query.token = this.token;
                 this.reconnect();
             }
             return result;
