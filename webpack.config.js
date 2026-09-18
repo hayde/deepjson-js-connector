@@ -3,12 +3,8 @@ const path = require('path');
 
 const SRC = './src/core.js';
 
-/** Gemeinsame externals für Node-Builds (CJS/ESM) */
-const nodeExternals = {
-  'axios':            'axios',
-  'form-data':        'form-data',
-  'socket.io-client': 'socket.io-client',
-};
+// Keine externals mehr: src/core.js hat keine Abhängigkeiten, alles läuft
+// auf Plattform-Builtins (fetch, FormData, WebSocket).
 
 /** @type {import('webpack').Configuration[]} */
 module.exports = [
@@ -24,7 +20,6 @@ module.exports = [
       filename: 'index.cjs',
       library: { type: 'commonjs2' },
     },
-    externals: nodeExternals,
     optimization: { minimize: false, mangleExports: false },
   },
 
@@ -40,8 +35,6 @@ module.exports = [
       filename: 'index.mjs',
       library: { type: 'module' },
     },
-    externals: nodeExternals,
-    externalsType: 'module',
     optimization: { minimize: false, mangleExports: false },
   },
 
@@ -52,7 +45,7 @@ module.exports = [
     mode: 'production',
     target: ['web', 'es5'],
     resolve: {
-        fallback: {fs: false},
+        fallback: { fs: false, path: false },
     },
     output: {
       path: path.resolve(__dirname, 'dist'),
@@ -60,14 +53,9 @@ module.exports = [
       library: { name: 'DeepJsonConnector', type: 'umd' },
       globalObject: 'this',
     },
-    externals: {
-      'socket.io-client': { root: 'io',       amd: 'socket.io-client', commonjs: 'socket.io-client', commonjs2: 'socket.io-client' },
-      'axios':            { root: 'axios',    amd: 'axios',            commonjs: 'axios',            commonjs2: 'axios'            },
-      'form-data':        { root: 'FormData', amd: 'form-data',        commonjs: 'form-data',        commonjs2: 'form-data'        },
-    },
   },
 
-  // ── 4. Browser-ESM standalone (alle Deps gebündelt, für unpkg) ───
+  // ── 4. Browser-ESM standalone (für unpkg) ───────────────────────
   {
     name: 'browser-esm',
     entry: SRC,
@@ -75,7 +63,7 @@ module.exports = [
     target: 'web',
     experiments: { outputModule: true },
     resolve: {
-        fallback: { fs: false },        // ← neu
+        fallback: { fs: false, path: false },
     },
     output: {
       path: path.resolve(__dirname, 'dist'),
@@ -83,6 +71,5 @@ module.exports = [
       library: { type: 'module' },
     },
     optimization: { minimize: true, mangleExports: false },
-    // KEINE externals — alles bundlen, Browser hat kein npm
   },
 ];

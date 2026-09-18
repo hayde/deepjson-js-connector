@@ -11,6 +11,20 @@ export interface ClientConfig {
    * token itself; use this hook to persist it (localStorage, keychain, ...).
    */
   onTokenRenewed?: (token: string) => void;
+  /** Extra headers sent with every request. */
+  headers?: Record<string, string>;
+  /**
+   * Supply a WebSocket implementation. Browsers and Node 22+ have one built
+   * in; on older Node pass e.g. the `ws` package, or run the process with
+   * --experimental-websocket. Realtime only.
+   */
+  WebSocket?: unknown;
+  /**
+   * Use socket.io-client instead of the built-in protocol client, e.g.
+   * `io: require('socket.io-client').io`. Only needed for transports the
+   * built-in client does not implement (HTTP long-polling fallback).
+   */
+  io?: (url: string, opts: { query: Record<string, unknown> }) => unknown;
 }
 
 export interface AuthResponse {
@@ -54,7 +68,29 @@ export class Connector {
 }
 
 /**
- * Extends Connector with real-time socket.io session management.
+ * Minimal socket.io v4 protocol client over a native WebSocket. Used by
+ * SyncConnector by default; exported for direct use and testing.
+ */
+export class DeepJSONSocket {
+  constructor(baseURL: string, opts?: {
+    query?: Record<string, unknown>;
+    path?: string;
+    reconnection?: boolean;
+    reconnectionDelay?: number;
+    reconnectionAttempts?: number;
+    WebSocket?: unknown;
+  });
+  readonly connected: boolean;
+  io: { opts: { query: Record<string, unknown> } };
+  on(event: string, handler: (...args: any[]) => void): this;
+  off(event: string, handler?: (...args: any[]) => void): this;
+  emit(event: string, ...args: unknown[]): this;
+  disconnect(): this;
+}
+
+/**
+ * Extends Connector with real-time session management, speaking the
+ * socket.io v4 protocol over a native WebSocket.
  */
 export class SyncConnector extends Connector {
   constructor(config: ClientConfig);
