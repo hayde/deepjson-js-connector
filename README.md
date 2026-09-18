@@ -10,6 +10,7 @@ A high-performance JSON storage server with real-time synchronization capabiliti
 - Secure Script Execution (VM2 Sandbox)
 - Real-time Synchronization Channels
 - Role-based Access Control
+- **Zero runtime dependencies** - runs on platform built-ins only
 
 ## Installation
 
@@ -19,11 +20,14 @@ npm install deepjson-connector
 ```
 
 ### Browser Client
+
+One file, nothing else:
+
 ```html
-<script src="https://cdn.jsdelivr.net/npm/axios@1.3.4/dist/axios.min.js"></script>
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<script src="path/to/deepjson-client.js"></script>
+<script src="path/to/deepjson-connector.js"></script>
 ```
+
+No axios, no socket.io-client, no CDN. See [Offline use](#offline-use).
 
 ## Quick Start
 
@@ -79,8 +83,43 @@ try {
 }
 
 // Manual token handling (for existing sessions)
-dj.token = 'eyJhbGciOiJIUzI1NiIsInR5c...';
+dj.setToken('eyJhbGciOiJIUzI1NiIsInR5c...');
 ```
+
+#### Sliding session (token renewal)
+
+Tokens are valid for one hour from the moment they are issued. A JWT carries its
+expiry inside the signed payload, so an existing token cannot be extended — the
+server instead issues a **new** token on every successful authenticated response
+and returns it in the `X-Renewed-Token` header.
+
+The connector picks that header up automatically for every request and replaces
+its stored token, so an actively used session never expires. Nothing needs to be
+done per call. To persist the renewed token outside of memory, pass the
+`onTokenRenewed` callback:
+
+```javascript
+const dj = new Connector({
+  baseURL: 'http://localhost:3000',
+  token: localStorage.getItem('dj_token'),      // restore a previous session
+  onTokenRenewed: (token) => {                  // keep it fresh
+    localStorage.setItem('dj_token', token);
+  }
+});
+```
+
+Notes:
+
+- The header is **not** sent on the login response (the first token comes from
+  the `token` field of its body), not on `401` responses, and not for HMAC
+  device authentication — those clients use no JWTs at all.
+- In the browser the server must expose the header via
+  `Access-Control-Expose-Headers: X-Renewed-Token` for cross-origin requests,
+  otherwise the response header is invisible to JavaScript.
+- A `socket.io` connection is only authenticated once, during the handshake.
+  `SyncConnector` keeps the handshake token up to date with each renewal, but a
+  connection open for more than an hour without any intervening HTTP request has
+  to be re-established via `reconnect()`.
 
 __Example Error Handling:__
 
@@ -231,6 +270,91 @@ const safeScript = await dj.post('scripts/clean-data', {
 });
 ```
 
+## Testing
+
+```bash
+npm test
+```
+
+The suite runs on `node:test`, built into Node - there is no test framework to
+install, so it works on a machine with no internet access. It needs no
+configuration, no running DeepJSON server, and **no credentials**: both stub
+servers accept whatever is sent, and every token in the tests is an obvious
+fake such as `test-token-1`.
+
+| File | Covers |
+|------|--------|
+| `test/http.test.js` | auth, token renewal, CRUD, flags, scripts, errors, uploads |
+| `test/socket.test.js` | the socket.io v4 protocol client and `SyncConnector` |
+| `test/packaging.test.js` | zero-dependency guarantee, generated file freshness, no committed secrets |
+| `test/helpers/` | the two stub servers, also dependency-free |
+
+`test/helpers/socketio-server.js` is a miniature socket.io server built on
+`node:http` and `node:crypto`: it does the RFC 6455 handshake and text framing,
+then the engine.io / socket.io packet layer. That is what lets the realtime
+tests run without installing `socket.io`.
+
+### Node versions
+
+The realtime tests need a global `WebSocket`, which Node has from v22. On
+Node 18-21 `npm test` adds `--experimental-websocket` automatically; if the
+flag is unavailable it says so and runs the HTTP tests only.
+
+## Offline use
+
+The connector has **no runtime dependencies**. It uses only what the platform
+already provides - `fetch`, `FormData`, `Blob`, `URL` and `WebSocket` - so
+nothing is downloaded at install time and nothing is fetched at runtime.
+
+For a machine with no internet access, copy one file next to your HTML and
+load it directly:
+
+```html
+<script src="deepjson-connector.js"></script>
+<script>
+  const dj = new DeepJSONConnector({ baseURL: 'http://localhost:3000' });
+</script>
+```
+
+Either file works, both are self-contained:
+
+| File | Size | Use |
+|------|------|-----|
+| `src/deepjson-connector.js` | ~26 KB | readable, easy to debug/patch on site |
+| `dist/deepjson-connector.min.js` | ~11 KB | minified UMD |
+| `dist/deepjson-connector.esm.js` | ~11 KB | `<script type="module">` / bundlers |
+
+### Requirements
+
+- **Browsers:** any current version. `fetch` and `WebSocket` are built in.
+- **Node:** 18 or newer for HTTP (`fetch` became global in 18).
+  Realtime additionally needs a `WebSocket`, which is global from Node 22.
+  On Node 18-21 either start the process with `--experimental-websocket`, or
+  hand one in:
+
+  ```javascript
+  import WebSocket from 'ws';
+  const sync = new SyncConnector({ baseURL, WebSocket });
+  ```
+
+### Realtime without socket.io-client
+
+The server speaks the socket.io v4 protocol, so a bare WebSocket is not enough
+on its own. The connector ships a small client for that protocol
+(`DeepJSONSocket`) covering what DeepJSON sessions use: the handshake query,
+connect/disconnect, events, and automatic reconnect that re-reads the current
+token.
+
+It deliberately implements only the WebSocket transport - there is no
+HTTP long-polling fallback. That is fine on a LAN and against any server
+reachable by WebSocket. If you need polling (restrictive proxies), pass
+socket.io-client in explicitly:
+
+```javascript
+import { io } from 'socket.io-client';
+const sync = new SyncConnector({ baseURL, io });
+```
+
 ## API Reference
 
 | Method          | Description                         |
@@ -241,7 +365,23 @@ const safeScript = await dj.post('scripts/clean-data', {
 | `.move(from, to)`   | Move data between keys         |
 | `.sync()`           | Real-time operations            |
 | `.listKeys(regEx)`  | list keys            |
+| `.getToken()`       | current JWT (auto-renewed)      |
+| `.setToken(token)`  | restore a persisted JWT         |
+| `.uploadFile(key, file)` | upload a file              |
 
+
+## Upgrading from 1.x
+
+The public API is unchanged - `login`, `get`, `post`, `put`, `delete`, `move`,
+`uploadFile`, `listKeys` and the flag setters all behave exactly as before.
+Two things did change:
+
+- **`connector.axios` is gone.** Nothing internally uses axios any more. If you
+  reached into it (interceptors, custom adapters), use the `headers` and
+  `onTokenRenewed` config options instead.
+- **Node 18+ is required**, for the global `fetch`.
+
+Installing the package no longer pulls axios, form-data or socket.io-client.
 
 ## License
 
