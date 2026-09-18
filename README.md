@@ -383,6 +383,22 @@ Two things did change:
 
 Installing the package no longer pulls axios, form-data or socket.io-client.
 
+### Known dependents
+
+A major version is opt-in: a project pinned to `^1.2.2` will never resolve to
+2.x on its own, and npm gives no warning about it. Nothing here updates by
+itself, so this list is the reminder.
+
+| Where | How it consumes the connector | To update |
+|-------|-------------------------------|-----------|
+| `tr.nested.muhasebe.workflow.folder` | npm dependency, `require("deepjson-connector")` in `tasks/`, `api/`, `whatsapp/` | raise the range to `^2.0.0` and reinstall |
+| `tr.nested.muhasebe.workflow.folder/public/lib/dj-local` | full git clone, served to the browser | `git pull` in that directory |
+| `tr.nested.deepjson.client.javascript` | `deepjson-connector.js` copied next to the test pages | copy `src/deepjson-connector.js` over it |
+
+Copied files carry no version, so npm can never update them - they have to be
+refreshed by hand. If you add another copy somewhere, add a row here too.
+
+
 ## License
 
 MIT License - See [LICENSE](LICENSE) for details
