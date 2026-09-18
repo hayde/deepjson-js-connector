@@ -7,7 +7,7 @@ const http = require('http');
 
 const FAKE_TOKEN = 'test-token-initial';
 
-/** Successive renewal tokens: test-token-1, test-token-2, ... */
+/**  Successive renewal tokens: test-token-1, test-token-2, ... */
 function tokenSeries() {
     let n = 0;
     return () => `test-token-${++n}`;
