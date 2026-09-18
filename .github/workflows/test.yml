@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is the floor (global fetch); 22 is the first with a global
+        # WebSocket, so the realtime tests take both code paths.
+        node-version: [18, 20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install dev dependencies
+        run: npm ci
+
+      - name: Check the generated UMD file is current
+        run: |
+          npm run build:umd
+          git diff --exit-code src/deepjson-connector.js
+
+      - name: Test
+        run: npm test
