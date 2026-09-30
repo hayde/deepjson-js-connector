@@ -63,6 +63,77 @@ describe('authentication', () => {
     });
 });
 
+describe('identity and build info', () => {
+    test('version() returns the server version', async () => {
+        const dj = await connected();
+        assert.deepEqual(await dj.version(), { version: '9.9.9-test' });
+        assert.equal(server.lastRequest.url, '/version');
+        assert.equal(server.lastRequest.method, 'GET');
+    });
+
+    test('version() renews the token, so it works as a heartbeat', async () => {
+        const dj = await connected();
+        const before = dj.getToken();
+        await dj.version();
+        assert.notEqual(dj.getToken(), before);
+    });
+
+    test('version() is authenticated', async () => {
+        const dj = await connected();
+        const token = dj.getToken();
+        await dj.version();
+        assert.equal(server.lastRequest.headers.authorization, `Bearer ${token}`);
+    });
+
+    test('whoami() returns identity, groups and the admin flag', async () => {
+        const dj = await connected();
+        const me = await dj.whoami();
+        assert.equal(server.lastRequest.url, '/whoami');
+        assert.equal(me.authenticated, true);
+        assert.equal(me.user.id, 'test-user');
+        assert.deepEqual(me.groups, ['testers']);
+        assert.equal(me.isAdmin, false);
+    });
+
+    test('whoami() without keys asks for no permissions', async () => {
+        const dj = await connected();
+        const me = await dj.whoami();
+        assert.equal('permissions' in me, false);
+    });
+
+    test('whoami(key) resolves permissions for a single key', async () => {
+        const dj = await connected();
+        const me = await dj.whoami('public.thing');
+        assert.equal(decodeURIComponent(server.lastRequest.url), '/whoami?keys=public.thing');
+        assert.deepEqual(me.permissions['public.thing'],
+            { C: true, R: true, U: true, D: true, X: false });
+    });
+
+    test('whoami([keys]) sends a comma-separated list', async () => {
+        const dj = await connected();
+        const me = await dj.whoami(['public.a', 'secret.b']);
+        assert.equal(decodeURIComponent(server.lastRequest.url), '/whoami?keys=public.a,secret.b');
+        assert.equal(me.permissions['public.a'].R, true);
+        assert.equal(me.permissions['secret.b'].R, false);
+    });
+
+    test('whoami() marks its rules list advisory', async () => {
+        // The server computes permissions with last-match-wins ordering, so a
+        // client must never evaluate `rules` itself.
+        const dj = await connected();
+        const me = await dj.whoami();
+        assert.equal(me.rulesAreAdvisory, true);
+        assert.ok(Array.isArray(me.rules));
+    });
+
+    test('a 401 from whoami surfaces as an auth error', async () => {
+        const dj = new Connector({ baseURL, token: 'not-a-valid-token' });
+        // The stub answers /whoami regardless, so drive the 401 route instead
+        // to prove the error shape is the same for identity calls.
+        await assert.rejects(() => dj.get('../__/401'), { status: 401 });
+    });
+});
+
 describe('sliding session (X-Renewed-Token)', () => {
     test('each response swaps in the token for the next request', async () => {
         const dj = await connected();

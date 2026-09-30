@@ -118,6 +118,40 @@
             return this;
         }
 
+        // Identity and build info ================================================
+
+        /**
+         * GET /version - the server's build version. It sits behind the auth
+         * middleware, so it answers three things at once: the server is up, the
+         * token is still valid, and what is being talked to. Cheap enough to use
+         * as a heartbeat, and the response renews the token like any other call.
+         * Resolves with the response body, e.g. { version: '2.3.1' }.
+         */
+        async version() {
+            return this._request({ method: 'GET', uri: '/version' });
+        }
+
+        /**
+         * GET /whoami - the caller's identity, groups and admin flag.
+         *
+         * Pass one or more keys to have the server resolve the effective
+         * permissions for them: whoami('reports.q3') or whoami(['a', 'b']) adds a
+         * `permissions` map of { C, R, U, D, X } booleans per key.
+         *
+         * The response also carries a `rules` list, flagged `rulesAreAdvisory`.
+         * It is for display and debugging only - never evaluate it to decide what
+         * the user may do. The server applies rules in order with last-match-wins,
+         * so the usual "any matching rule grants it" reading disagrees with the
+         * server precisely where it matters. Ask for `permissions` instead; those
+         * come from the same check that enforces on every request.
+         */
+        async whoami(keys = undefined) {
+            const query = {};
+            const requested = Array.isArray(keys) ? keys.join(',') : keys;
+            if (requested) query.keys = requested;
+            return this._request({ method: 'GET', uri: '/whoami', query });
+        }
+
         isBinary() {
             return this.binary;
         }

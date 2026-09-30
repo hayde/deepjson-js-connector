@@ -32,6 +32,39 @@ export interface AuthResponse {
   [key: string]: unknown;
 }
 
+/** Effective permissions for one key, as resolved by the server. */
+export interface KeyPermissions {
+  C: boolean;
+  R: boolean;
+  U: boolean;
+  D: boolean;
+  X: boolean;
+}
+
+export interface VersionResponse {
+  version: string;
+  [key: string]: unknown;
+}
+
+export interface WhoamiResponse {
+  version: string;
+  authenticated: boolean;
+  user: { id: string; email?: string };
+  groups: string[];
+  isAdmin: boolean;
+  /**
+   * For display and debugging only - always accompanied by
+   * `rulesAreAdvisory: true`. The server evaluates rules in order with
+   * last-match-wins, so a client that reimplements "any matching rule grants
+   * it" will disagree with it. Use `permissions` for anything load-bearing.
+   */
+  rules: Array<{ group: string; regex: string; crudx: string }>;
+  rulesAreAdvisory: boolean;
+  /** Present only when keys were requested. */
+  permissions?: Record<string, KeyPermissions>;
+  [key: string]: unknown;
+}
+
 export interface RequestOptions {
   overwrite?: boolean;
 }
@@ -48,6 +81,12 @@ export class Connector {
   getToken(): string | null;
   /** Restores a previously persisted token for subsequent requests. */
   setToken(token: string | null): this;
+
+  // Identity and build info (both authenticated, both renew the token)
+  /** GET /version - also usable as a heartbeat / token-validity check. */
+  version(): Promise<VersionResponse>;
+  /** GET /whoami - pass keys to have the server resolve their permissions. */
+  whoami(keys?: string | string[]): Promise<WhoamiResponse>;
 
   // Flags (chainable setters)
   isBinary(): boolean;

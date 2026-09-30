@@ -1,6 +1,6 @@
 {
   "name": "deepjson-connector",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Official connector for DeepJSON Server - JSON storage with real-time sync. Zero dependencies.",
   "main": "lib/index.cjs",
   "module": "lib/index.mjs",
