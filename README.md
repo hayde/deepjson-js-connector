@@ -121,6 +121,37 @@ Notes:
   connection open for more than an hour without any intervening HTTP request has
   to be re-established via `reconnect()`.
 
+### Identity & server info
+
+Both endpoints sit behind authentication, so each one doubles as a token check
+and each response renews the token.
+
+```javascript
+// Cheap heartbeat: is the server up, is my token still good, what am I on?
+const { version } = await dj.version();
+
+// Who am I?
+const me = await dj.whoami();
+// { version, authenticated, user: { id, email }, groups, isAdmin,
+//   rules, rulesAreAdvisory: true }
+
+// Ask the server what I may do with specific keys
+const me2 = await dj.whoami(['reports.q3', 'payroll.2026']);
+if (me2.permissions['reports.q3'].R) {
+  // ...safe to read
+}
+```
+
+`permissions` maps each requested key to `{ C, R, U, D, X }` booleans.
+
+> **Do not evaluate `rules` yourself.** The response includes the raw rule list
+> for display and debugging, flagged `rulesAreAdvisory: true`. The server walks
+> every group's rules in order and the **last match wins**, so a later rule can
+> revoke what an earlier one granted. The intuitive "any matching rule grants
+> it" reading disagrees with the server exactly where it matters - on revocations.
+> Anything load-bearing goes through `permissions`, which the server computes
+> with the same check it enforces on every request.
+
 __Example Error Handling:__
 
 ```javascript
@@ -368,6 +399,8 @@ const sync = new SyncConnector({ baseURL, io });
 | `.getToken()`       | current JWT (auto-renewed)      |
 | `.setToken(token)`  | restore a persisted JWT         |
 | `.uploadFile(key, file)` | upload a file              |
+| `.version()`        | server version / heartbeat      |
+| `.whoami(keys?)`    | identity, groups, permissions    |
 
 
 ## Upgrading from 1.x

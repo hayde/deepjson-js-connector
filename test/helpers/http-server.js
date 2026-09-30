@@ -44,6 +44,37 @@ function createServer() {
                     JSON.stringify({ token: FAKE_TOKEN, user: { id: 'test-user', groups: ['testers'] } }));
             }
 
+            // --- identity / build info ------------------------------------
+            if (req.url.startsWith('/version')) {
+                return send(200, { 'Content-Type': 'application/json', 'X-Renewed-Token': nextToken() },
+                    JSON.stringify({ version: '9.9.9-test' }));
+            }
+            if (req.url.startsWith('/whoami')) {
+                const url = new URL(req.url, 'http://localhost');
+                const requested = (url.searchParams.get('keys') || '')
+                    .split(',').map(k => k.trim()).filter(Boolean);
+                const payload = {
+                    version: '9.9.9-test',
+                    authenticated: true,
+                    user: { id: 'test-user', email: 'test-user@example.invalid' },
+                    groups: ['testers'],
+                    isAdmin: false,
+                    rules: [{ group: 'testers', regex: '^public\\.', crudx: '11110' }],
+                    rulesAreAdvisory: true,
+                };
+                if (requested.length) {
+                    payload.permissions = {};
+                    for (const key of requested) {
+                        // Anything under public. is readable; nothing else is.
+                        const allowed = key.startsWith('public.');
+                        payload.permissions[key] =
+                            { C: allowed, R: allowed, U: allowed, D: allowed, X: false };
+                    }
+                }
+                return send(200, { 'Content-Type': 'application/json', 'X-Renewed-Token': nextToken() },
+                    JSON.stringify(payload));
+            }
+
             // --- canned responses used by individual tests ----------------
             if (req.url.startsWith('/__/401')) {
                 // No X-Renewed-Token here, matching the real server.
