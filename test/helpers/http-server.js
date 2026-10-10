@@ -83,7 +83,11 @@ const SAMPLE_KEYS = [
     'public.notice', 'public.terms',
 ];
 
-function createServer({ keyListLimit } = {}) {
+/**
+ * @param isAdmin         whether the caller passes the admin guard
+ * @param accessFileValid whether reload-access accepts the file on disk
+ */
+function createServer({ keyListLimit, isAdmin = true, accessFileValid = true } = {}) {
     const nextToken = tokenSeries();
     const state = { lastRequest: null, requests: [] };
     // Versioned documents for the conditional-request tests, keyed by path.
@@ -170,6 +174,69 @@ function createServer({ keyListLimit } = {}) {
             }
             if (req.url.startsWith('/__/hang')) {
                 return; // never responds, for the timeout test
+            }
+
+            // --- admin router ---------------------------------------------
+            if (req.url.startsWith('/admin/')) {
+                const headers = { 'Content-Type': 'application/json', 'X-Renewed-Token': nextToken() };
+                // The guard the real router installs before every admin route.
+                if (!isAdmin) {
+                    return send(403, headers, JSON.stringify({ error: 'Admin access required' }));
+                }
+                const path = req.url.split('?')[0];
+
+                if (path === '/admin/keys') {
+                    const source = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams.entries());
+                    const result = listKeys(source, SAMPLE_KEYS, keyListLimit);
+                    return send(result.status, headers, JSON.stringify(result.body));
+                }
+                if (path === '/admin/health') {
+                    return send(200, headers, JSON.stringify({
+                        uptime: 1234.5,
+                        storage: {
+                            indexedKeys: SAMPLE_KEYS.length,
+                            disk: { totalBytes: 1000, freeBytes: 400, usedBytes: 600 },
+                        },
+                        modifications: 42,
+                    }));
+                }
+                if (path.startsWith('/admin/modifications/')) {
+                    const since = parseInt(path.slice('/admin/modifications/'.length), 10);
+                    const all = [
+                        { key: 'users.alice', modCount: 41, modified: 1, operation: 'PUT' },
+                        { key: 'users.bob', modCount: 42, modified: 2, operation: 'POST' },
+                    ];
+                    return send(200, headers, JSON.stringify({
+                        latestModCount: 42,
+                        changes: all.filter(c => c.modCount > since),
+                    }));
+                }
+                if (path === '/admin/rebuild-index' && req.method === 'POST') {
+                    return send(200, headers, JSON.stringify({ status: 'success' }));
+                }
+                if (path === '/admin/rotate-index' && req.method === 'POST') {
+                    return send(200, headers, JSON.stringify({ status: 'success', rotatedEntries: 8 }));
+                }
+                if (path === '/admin/reload-access' && req.method === 'POST') {
+                    if (!accessFileValid) {
+                        return send(400, headers, JSON.stringify({
+                            error: 'access_file was rejected',
+                            problems: [
+                                'access_file: user "ghost" references unknown group "editors"',
+                                'access_file: user "ghost" has no password',
+                            ],
+                        }));
+                    }
+                    return send(200, headers, JSON.stringify({ status: 'success', users: 3, groups: 2 }));
+                }
+                if (path === '/admin/logs') {
+                    // One array per day file, newest first - the real shape.
+                    return send(200, headers, JSON.stringify([
+                        [{ ts: 'today-1', op: 'GET' }, { ts: 'today-2', op: 'PUT' }],
+                        [{ ts: 'yesterday-1', op: 'POST' }],
+                    ]));
+                }
+                return send(404, headers, JSON.stringify({ error: 'Not found' }));
             }
 
             // --- key listing ----------------------------------------------

@@ -768,6 +768,146 @@ describe('configuration', () => {
     });
 });
 
+describe('admin API', () => {
+    test('all seven endpoints are exposed', async () => {
+        const dj = await connected();
+        assert.deepEqual(Object.keys(dj.admin).sort(),
+            ['health', 'keys', 'logs', 'modifications', 'rebuildIndex', 'reloadAccess', 'rotateIndex']);
+    });
+
+    test('keys() lists via /admin/keys with the listing options', async () => {
+        const dj = await connected();
+        const result = await dj.admin.keys('^users\\.', { limit: 2 });
+        assert.equal(server.lastRequest.url.split('?')[0], '/admin/keys');
+        assert.match(decodeURIComponent(server.lastRequest.url), /keys=\^users/);
+        assert.match(server.lastRequest.url, /limit=2/);
+        assert.equal(result.total, 3);
+        assert.equal(result.keys.length, 2);
+    });
+
+    test('health() reports uptime, storage and modifications', async () => {
+        const dj = await connected();
+        const health = await dj.admin.health();
+        assert.equal(server.lastRequest.url, '/admin/health');
+        assert.equal(typeof health.uptime, 'number');
+        assert.equal(health.storage.indexedKeys, SAMPLE_KEYS.length);
+        assert.equal(health.storage.disk.usedBytes, 600);
+        assert.equal(health.modifications, 42);
+    });
+
+    test('modifications(since) returns only later changes', async () => {
+        const dj = await connected();
+        const all = await dj.admin.modifications(0);
+        assert.equal(server.lastRequest.url, '/admin/modifications/0');
+        assert.equal(all.latestModCount, 42);
+        assert.equal(all.changes.length, 2);
+
+        const recent = await dj.admin.modifications(41);
+        assert.equal(recent.changes.length, 1);
+        assert.equal(recent.changes[0].key, 'users.bob');
+    });
+
+    test('modifications() can be chained from latestModCount', async () => {
+        const dj = await connected();
+        const first = await dj.admin.modifications(0);
+        const next = await dj.admin.modifications(first.latestModCount);
+        assert.deepEqual(next.changes, [], 'nothing new since the last poll');
+    });
+
+    test('modifications() rejects a non-integer instead of returning nothing', async () => {
+        // The server parseInt()s it and compares with >, so 'abc' would come
+        // back as an empty change list with a 200 - silently wrong.
+        const dj = await connected();
+        for (const bad of ['abc', -1, 1.5, null, undefined, {}]) {
+            assert.throws(() => dj.admin.modifications(bad),
+                /needs a non-negative integer/, `for ${JSON.stringify(bad)}`);
+        }
+    });
+
+    test('rebuildIndex() and rotateIndex() POST to their routes', async () => {
+        const dj = await connected();
+        const rebuilt = await dj.admin.rebuildIndex();
+        assert.equal(server.lastRequest.method, 'POST');
+        assert.equal(server.lastRequest.url, '/admin/rebuild-index');
+        assert.equal(rebuilt.status, 'success');
+
+        const rotated = await dj.admin.rotateIndex();
+        assert.equal(server.lastRequest.url, '/admin/rotate-index');
+        assert.equal(rotated.status, 'success');
+        assert.equal(rotated.rotatedEntries, 8);
+    });
+
+    test('reloadAccess() re-reads the access file', async () => {
+        const dj = await connected();
+        const result = await dj.admin.reloadAccess();
+        assert.equal(server.lastRequest.method, 'POST');
+        assert.equal(server.lastRequest.url, '/admin/reload-access');
+        assert.equal(result.status, 'success');
+    });
+
+    test('logs() returns one array per day file', async () => {
+        const dj = await connected();
+        const days = await dj.admin.logs();
+        assert.equal(server.lastRequest.url, '/admin/logs');
+        assert.ok(Array.isArray(days));
+        assert.ok(Array.isArray(days[0]), 'nested, not flat');
+        assert.equal(days[0].length, 2);
+        assert.equal(days[1].length, 1);
+    });
+});
+
+describe('admin API: rejected access file', () => {
+    let srv, url;
+    before(async () => {
+        srv = createServer({ accessFileValid: false });
+        url = await srv.listen();
+    });
+    after(async () => { await srv.close(); });
+
+    test('a bad access file is a 400 listing the specific problems', async () => {
+        const dj = new Connector({ baseURL: url });
+        await dj.login('any-user', 'any-password');
+        await assert.rejects(() => dj.admin.reloadAccess(), (err) => {
+            assert.equal(err.status, 400, 'not a 500 - the server is still serving');
+            assert.match(err.details.error, /rejected/);
+            assert.equal(err.details.problems.length, 2);
+            assert.match(err.details.problems[0], /unknown group/);
+            return true;
+        });
+    });
+});
+
+describe('admin API: non-admin caller', () => {
+    let srv, url;
+    before(async () => {
+        srv = createServer({ isAdmin: false });
+        url = await srv.listen();
+    });
+    after(async () => { await srv.close(); });
+
+    test('every admin call answers 403', async () => {
+        const dj = new Connector({ baseURL: url });
+        await dj.login('any-user', 'any-password');
+
+        const calls = {
+            keys: () => dj.admin.keys(),
+            health: () => dj.admin.health(),
+            modifications: () => dj.admin.modifications(0),
+            rebuildIndex: () => dj.admin.rebuildIndex(),
+            rotateIndex: () => dj.admin.rotateIndex(),
+            reloadAccess: () => dj.admin.reloadAccess(),
+            logs: () => dj.admin.logs(),
+        };
+        for (const [name, call] of Object.entries(calls)) {
+            await assert.rejects(call, (err) => {
+                assert.equal(err.status, 403, `${name} should be 403`);
+                assert.match(err.details.error, /Admin access required/);
+                return true;
+            }, name);
+        }
+    });
+});
+
 describe('uploadFile', () => {
     let tmpFile;
     beforeEach(() => {

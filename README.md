@@ -479,6 +479,87 @@ The realtime tests need a global `WebSocket`, which Node has from v22. On
 Node 18-21 `npm test` adds `--experimental-websocket` automatically; if the
 flag is unavailable it says so and runs the HTTP tests only.
 
+## Admin API
+
+Administrative endpoints are grouped under `dj.admin`, so it is visible at the
+call site that they need an admin account. Each one rejects with `403` and
+`{ error: 'Admin access required' }` otherwise - `whoami()` reports `isAdmin`
+if you want to check before offering them in a UI.
+
+```javascript
+const me = await dj.whoami();
+if (!me.isAdmin) return;
+
+const health = await dj.admin.health();
+// { uptime, storage: { indexedKeys, disk: { totalBytes, freeBytes, usedBytes } },
+//   modifications }
+
+await dj.admin.reloadAccess();      // re-read access.json, no restart
+```
+
+| Call | Endpoint | Purpose |
+|------|----------|---------|
+| `admin.keys(pattern, opts?)` | `GET /admin/keys` | same listing as `listKeys()` |
+| `admin.health()` | `GET /admin/health` | uptime, index size, disk usage |
+| `admin.modifications(since)` | `GET /admin/modifications/:since` | keys changed since a modCount |
+| `admin.rebuildIndex()` | `POST /admin/rebuild-index` | rebuild the index from disk |
+| `admin.rotateIndex()` | `POST /admin/rotate-index` | compact the index log |
+| `admin.reloadAccess()` | `POST /admin/reload-access` | re-read `access_file` |
+| `admin.logs()` | `GET /admin/logs` | last 7 days of log entries |
+
+### Reloading access.json
+
+A rejected file is a **`400`, not a `500`** - the server keeps serving on the
+previous access data, so a bad edit is recoverable. The specific faults are in
+`err.details.problems`, which is what you want to show, not just the message:
+
+```javascript
+try {
+  await dj.admin.reloadAccess();
+} catch (err) {
+  if (err.status === 400) {
+    err.details.problems.forEach(p => console.error(' -', p));
+    // e.g. 'access_file: user "ghost" references unknown group "editors"'
+  } else throw err;
+}
+```
+
+### Polling for changes
+
+`modifications(since)` returns every key whose `modCount` is above `since`,
+plus the current `latestModCount` to use as the next cursor:
+
+```javascript
+let cursor = 0;
+setInterval(async () => {
+  const { latestModCount, changes } = await dj.admin.modifications(cursor);
+  changes.forEach(c => console.log(c.operation, c.key));
+  cursor = latestModCount;
+}, 5000);
+```
+
+It throws on anything that is not a non-negative integer. That is deliberate:
+the server `parseInt`s the value, so `null` or `'abc'` would come back as an
+empty change list with a `200` - a silently wrong answer rather than an error.
+
+### rebuild-index vs rotate-index
+
+Not interchangeable. `rebuildIndex()` reconstructs the index by reading **every
+data file on disk** - correct but expensive. `rotateIndex()` only compacts the
+append-only index log, rewriting it from the index already in memory. Reach for
+rotate for routine maintenance; rebuild when the index itself is suspect.
+
+### Log shape
+
+`admin.logs()` returns **one array per day file, newest day first** - not one
+flat list. Days with no log file are omitted entirely, so a position in the
+outer array does not map to an age:
+
+```javascript
+const days = await dj.admin.logs();
+const flat = days.flat();            // if you just want all entries
+```
+
 ## Offline use
 
 The connector has **no runtime dependencies**. It uses only what the platform

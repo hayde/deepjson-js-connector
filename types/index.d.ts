@@ -112,6 +112,54 @@ export interface ImageOptions {
   quality?: number;
 }
 
+export interface AdminHealth {
+  /** Process uptime in seconds. */
+  uptime: number;
+  storage: {
+    indexedKeys: number;
+    /** Byte counts, or `{ error }` when the filesystem could not be queried. */
+    disk: { totalBytes: number; freeBytes: number; usedBytes: number } | { error: string };
+  };
+  modifications: number;
+}
+
+export interface AdminModification {
+  key: string;
+  modCount: number;
+  modified: number;
+  operation: string;
+}
+
+export interface AdminModifications {
+  /** Feed this back as the next `since` to poll incrementally. */
+  latestModCount: number;
+  changes: AdminModification[];
+}
+
+/**
+ * Administrative operations. Every call answers 403 for a non-admin account;
+ * `whoami().isAdmin` tells you in advance.
+ */
+export interface AdminAPI {
+  /** Same listing as listKeys(), via /admin/keys. */
+  keys(filters?: string | RegExp, options?: ListKeysOptions): Promise<ListKeysResult>;
+  health(): Promise<AdminHealth>;
+  /** Changes with modCount above `since`. Throws unless given a non-negative integer. */
+  modifications(since: number | string): Promise<AdminModifications>;
+  /** Reconstructs the index from every data file on disk. Expensive. */
+  rebuildIndex(): Promise<{ status: string }>;
+  /** Compacts the index log from memory. Cheap; does not read data files. */
+  rotateIndex(): Promise<{ status: string } & Record<string, unknown>>;
+  /**
+   * Re-reads access_file without a restart. A rejected file rejects with a 400
+   * whose `details.problems` lists the specific faults; the server keeps
+   * serving on the previous access data.
+   */
+  reloadAccess(): Promise<{ status: string } & Record<string, unknown>>;
+  /** Last 7 days of log entries: one array per day file, newest first. */
+  logs(): Promise<Array<Array<Record<string, unknown>>>>;
+}
+
 export interface RequestOptions {
   overwrite?: boolean;
 }
@@ -180,6 +228,9 @@ export class Connector {
   put(key: string, value: unknown, script?: string): Promise<unknown>;
   delete(key: string): Promise<unknown>;
   move(key: string, keyTo: string): Promise<unknown>;
+
+  /** Administrative operations - admin accounts only, 403 otherwise. */
+  readonly admin: AdminAPI;
 
   // Files & keys
   uploadFile(key: string, file: File | string, options?: RequestOptions): Promise<unknown>;

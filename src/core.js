@@ -113,6 +113,11 @@ export class DeepJSONConnector {
             ? config.onTokenRenewed
             : null;
 
+        // Administrative operations, grouped so it is obvious at the call site
+        // that they need an admin account and answer 403 otherwise. whoami()
+        // reports isAdmin if you want to check before offering them in a UI.
+        this.admin = this._createAdminAPI();
+
         if (typeof fetch !== 'function') {
             throw new Error(
                 'DeepJSONConnector requires a global fetch(). Use Node 18+ or a modern browser.'
@@ -406,6 +411,16 @@ export class DeepJSONConnector {
      * caps every listing. Check it rather than assuming `keys` is complete.
      */
     async listKeys(filters, options = {}) {
+        return this._request({
+            method: 'GET',
+            uri: '/cmd/keys',
+            query: this._listKeysQuery(filters, options)
+        });
+    }
+
+    /** Shared by listKeys() and admin.keys(): /admin/keys forwards to the
+     *  same server handler, so the options are identical. */
+    _listKeysQuery(filters, options = {}) {
         const query = {};
         const pattern = _patternFrom(filters);
         if (pattern !== undefined) query.keys = pattern;
@@ -414,12 +429,88 @@ export class DeepJSONConnector {
         if (options.limit !== undefined) query.limit = options.limit;
         if (options.offset !== undefined) query.offset = options.offset;
         if (options.count) query.count = true;
+        return query;
+    }
 
-        return this._request({
-            method: 'GET',
-            uri: '/cmd/keys',
-            query
-        });
+    _createAdminAPI() {
+        return {
+            /**
+             * GET /admin/keys - the same listing as listKeys(), including
+             * `limit`/`offset`/`count` and the `key_list_limit` ceiling; the
+             * server forwards both to one handler. Still filtered by read
+             * permission, so for an admin it mirrors listKeys().
+             */
+            keys: (filters, options = {}) => this._request({
+                method: 'GET',
+                uri: '/admin/keys',
+                query: this._listKeysQuery(filters, options)
+            }),
+
+            /**
+             * GET /admin/health - process uptime, index size and disk usage.
+             * Resolves to { uptime, storage: { indexedKeys, disk }, modifications }.
+             * `storage.disk` is { error } instead of byte counts when the
+             * filesystem could not be queried.
+             */
+            health: () => this._request({ method: 'GET', uri: '/admin/health' }),
+
+            /**
+             * GET /admin/modifications/:since - every key whose modCount is
+             * above `since`, for polling changes without re-reading the keyspace.
+             * Resolves to { latestModCount, changes: [{ key, modCount, modified,
+             * operation }] }; feed `latestModCount` back in as the next `since`.
+             */
+            modifications: (since) => {
+                // The server parseInt()s this and compares with >, so anything
+                // unparseable yields an empty `changes` with a 200 - a silently
+                // wrong answer rather than an error. Refuse it here instead.
+                //
+                // Only numbers and numeric strings are accepted. Number() is
+                // too permissive on its own: null, '' and false all coerce to
+                // 0, which would quietly mean "every change ever" rather than
+                // failing on an accidental argument.
+                const usable = (typeof since === 'number')
+                    || (typeof since === 'string' && since.trim() !== '');
+                const n = usable ? Number(since) : NaN;
+                if (!Number.isInteger(n) || n < 0) {
+                    throw new Error(
+                        `admin.modifications(since) needs a non-negative integer, got ${JSON.stringify(since)}`
+                    );
+                }
+                return this._request({ method: 'GET', uri: `/admin/modifications/${n}` });
+            },
+
+            /**
+             * POST /admin/rebuild-index - reconstructs the index by reading
+             * every data file on disk. Expensive; see rotateIndex() for the
+             * cheap log compaction.
+             */
+            rebuildIndex: () => this._request({ method: 'POST', uri: '/admin/rebuild-index' }),
+
+            /**
+             * POST /admin/rotate-index - compacts the append-only index log,
+             * rewriting it from the in-memory index. Does not read data files.
+             */
+            rotateIndex: () => this._request({ method: 'POST', uri: '/admin/rotate-index' }),
+
+            /**
+             * POST /admin/reload-access - re-reads access_file without a restart.
+             *
+             * A rejected file is a 400, not a 500: the server keeps serving on
+             * the previous access data. The specific faults are in
+             * `err.details.problems`, so surface those rather than just the message.
+             */
+            reloadAccess: () => this._request({ method: 'POST', uri: '/admin/reload-access' }),
+
+            /**
+             * GET /admin/logs - the last 7 days of log entries.
+             *
+             * Note the shape: an array *per day file*, newest day first, each
+             * holding that day's entries - not one flat list. Days with no log
+             * file are omitted entirely, so index does not map to age.
+             */
+            logs: () => this._request({ method: 'GET', uri: '/admin/logs' }),
+        };
     }
 
     // Private methods
