@@ -197,6 +197,157 @@ describe('sliding session (X-Renewed-Token)', () => {
     });
 });
 
+describe('optimistic concurrency (ETag / If-Match)', () => {
+    const KEY = '__versioned/doc';
+    const PATH = '/keys/__versioned/doc';
+
+    test('getETag() is null before anything has been fetched', async () => {
+        const dj = await connected();
+        assert.equal(dj.getETag(), null);
+    });
+
+    test('a write returns the ETag of the version just written', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        assert.match(dj.getETag(), /^"\d+"$/);
+    });
+
+    test('a read exposes the current ETag', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const written = dj.getETag();
+        const value = await dj.get(KEY);
+        assert.deepEqual(value, { v: 1 });
+        assert.equal(dj.getETag(), written, 'read reports the same version');
+    });
+
+    test('setIfMatch sends the If-Match header and is one-shot', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const etag = dj.getETag();
+
+        assert.equal(dj.setIfMatch(etag), dj, 'is chainable');
+        await dj.put(KEY, { v: 2 });
+        assert.equal(server.lastRequest.headers['if-match'], etag);
+
+        // Cleared after the request, like the other flags.
+        await dj.put(KEY, { v: 3 });
+        assert.equal(server.lastRequest.headers['if-match'], undefined);
+    });
+
+    test('a matching If-Match write succeeds and advances the version', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const first = dj.getETag();
+
+        await dj.setIfMatch(first).put(KEY, { v: 2 });
+        const second = dj.getETag();
+        assert.notEqual(second, first, 'version moved on');
+        assert.deepEqual(await dj.get(KEY), { v: 2 });
+    });
+
+    test('a stale If-Match write is refused with 412', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const stale = dj.getETag();
+
+        // Another client writes in between.
+        const theirs = server.bump(PATH, { v: 'theirs' });
+        assert.notEqual(theirs, stale);
+
+        await assert.rejects(() => dj.setIfMatch(stale).put(KEY, { v: 'mine' }), (err) => {
+            assert.equal(err.status, 412);
+            assert.match(err.message, /412/);
+            assert.match(err.details.error, /Precondition failed/);
+            assert.equal(err.details.expected, stale);
+            assert.equal(err.details.current, theirs);
+            return true;
+        });
+
+        assert.deepEqual(await dj.get(KEY), { v: 'theirs' }, 'our write did not land');
+    });
+
+    test('a 412 reports the current version, so a retry needs no re-read', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const stale = dj.getETag();
+        server.bump(PATH, { v: 'theirs' });
+
+        let recovered = null;
+        try {
+            await dj.setIfMatch(stale).put(KEY, { v: 'mine' });
+        } catch (err) {
+            recovered = err.etag;                       // from the ETag header
+            assert.equal(err.etag, err.details.current, 'header and body agree');
+        }
+        assert.ok(recovered, 'the error carried the current ETag');
+
+        // Retry with it and the write lands.
+        await dj.setIfMatch(recovered).put(KEY, { v: 'mine' });
+        assert.deepEqual(await dj.get(KEY), { v: 'mine' });
+    });
+
+    test("If-Match '*' requires the key to exist", async () => {
+        const dj = await connected();
+        await dj.delete(KEY);
+        await assert.rejects(() => dj.setIfMatch('*').put(KEY, { v: 1 }), { status: 412 });
+
+        await dj.put(KEY, { v: 1 });
+        await dj.setIfMatch('*').put(KEY, { v: 2 });
+        assert.deepEqual(await dj.get(KEY), { v: 2 });
+    });
+
+    test("If-None-Match '*' is a conditional create", async () => {
+        const dj = await connected();
+        await dj.delete(KEY);
+
+        await dj.setIfNoneMatch('*').put(KEY, { v: 'created' });
+        assert.deepEqual(await dj.get(KEY), { v: 'created' });
+
+        // Now that it exists, the same conditional create must fail.
+        await assert.rejects(() => dj.setIfNoneMatch('*').put(KEY, { v: 'again' }), (err) => {
+            assert.equal(err.status, 412);
+            assert.match(err.details.error, /If-None-Match/);
+            return true;
+        });
+    });
+
+    test('If-Match takes precedence when both are set', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const etag = dj.getETag();
+        await dj.setIfMatch(etag).setIfNoneMatch('*').put(KEY, { v: 2 });
+        assert.equal(server.lastRequest.headers['if-match'], etag);
+        assert.equal(server.lastRequest.headers['if-none-match'], '*');
+    });
+
+    test('an unquoted or W/ prefixed tag is still accepted by the server', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const quoted = dj.getETag();          // '"3"'
+        const bare = quoted.replace(/"/g, '');
+
+        await dj.setIfMatch(bare).put(KEY, { v: 2 });
+        await dj.setIfMatch('W/' + dj.getETag()).put(KEY, { v: 3 });
+        assert.deepEqual(await dj.get(KEY), { v: 3 });
+    });
+
+    test('getETag() is cleared when a response carries none', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        assert.ok(dj.getETag(), 'has one after a versioned write');
+        await dj.get('some.unversioned.key');
+        assert.equal(dj.getETag(), null, 'not carried over to an unversioned key');
+    });
+
+    test('no conditional headers are sent unless asked for', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        assert.equal(server.lastRequest.headers['if-match'], undefined);
+        assert.equal(server.lastRequest.headers['if-none-match'], undefined);
+    });
+});
+
 describe('CRUD', () => {
     test('get issues a plain GET with no body', async () => {
         const dj = await connected();

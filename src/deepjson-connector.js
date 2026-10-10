@@ -55,6 +55,21 @@
         }
     }
 
+    /**
+     * Normalises a key filter to the pattern string the server compiles.
+     *
+     * A RegExp contributes its `source`: stringifying and slicing off the first
+     * and last character - what this used to do - mangles any regex carrying
+     * flags, turning /^users\./i into "^users\./" and matching the wrong thing
+     * with no error. Flags themselves cannot be honoured: the server builds
+     * `new RegExp(pattern)` with none, so they are dropped rather than smuggled in.
+     */
+    function _patternFrom(filters) {
+        if (filters === undefined || filters === null || filters === '') return undefined;
+        if (typeof filters.source === 'string') return filters.source;   // RegExp, incl. cross-realm
+        return String(filters);
+    }
+
     /** True for values we should JSON-encode rather than send verbatim. */
     function _isPlainPayload(data) {
         if (data === null || typeof data !== 'object') return false;
@@ -75,6 +90,14 @@
             // transmition options
             this.binary = false;
             this.overwriteKey = false;
+
+            // Conditional-request state. Both are one-shot, like the flags above:
+            // consumed by the next request and then cleared.
+            this.ifMatch = null;
+            this.ifNoneMatch = null;
+
+            // ETag of the most recent response, or null if it carried none.
+            this.lastEtag = null;
 
             this.isNode = _isNode;
 
@@ -164,6 +187,44 @@
         }
         setOverwriteKey(true_or_false) {
             this.overwriteKey = true_or_false;
+            return this;
+        }
+
+        // Optimistic concurrency ==================================================
+
+        /**
+         * The ETag of the most recent response, or null if it carried none (the key
+         * does not exist, or the endpoint does not version).
+         *
+         * The server sends it on reads, on writes (the version just written, so a
+         * read-modify-write loop can chain without re-reading) and on a 412, so a
+         * client that loses a race learns the current version without a round trip.
+         */
+        getETag() {
+            return this.lastEtag;
+        }
+
+        /**
+         * Sends If-Match on the next request: the write proceeds only while the key
+         * is still at this version, otherwise the server answers 412. Pass '*' to
+         * mean "only if the key exists at all".
+         *
+         * One-shot - cleared once the request has been sent, like setBinary().
+         */
+        setIfMatch(etag) {
+            this.ifMatch = etag === undefined ? null : etag;
+            return this;
+        }
+
+        /**
+         * Sends If-None-Match on the next request. The useful value is '*': a
+         * conditional create that fails with 412 if the key already exists.
+         *
+         * If-Match wins if both are set, per RFC 9110 section 13.2.2.
+         * One-shot, like setIfMatch().
+         */
+        setIfNoneMatch(etag) {
+            this.ifNoneMatch = etag === undefined ? null : etag;
             return this;
         }
 
@@ -273,24 +334,37 @@
         }
 
         // key list methods
-        async listKeys(filters) {
-            let tmp_filter = undefined;
-            //check if filters is a regex or not
-            if (filters) {
-                if (filters.test) {
-                    // regex
-                    tmp_filter = filters.toString();
-                    // remove first and last char
-                    tmp_filter = tmp_filter.substring(1, tmp_filter.length - 1);
-                } else {
-                    // string value
-                    tmp_filter = filters;
-                }
-            }
+
+        /**
+         * Lists key names matching a pattern, answered from the in-memory index
+         * without reading any document.
+         *
+         * @param filters  RegExp or pattern string; omit for every readable key.
+         * @param options  { limit, offset } to page, { count: true } for the total
+         *                 alone with no key list.
+         *
+         * Resolves to { total, keys } - `total` is always the full number of
+         * matches, so it can exceed `keys.length`. When the result is paged the
+         * server adds `offset`, `limit` and `truncated`.
+         *
+         * Note that `truncated` can be true even when nothing was asked to be
+         * paged: an operator can set `key_list_limit` in the server config, which
+         * caps every listing. Check it rather than assuming `keys` is complete.
+         */
+        async listKeys(filters, options = {}) {
+            const query = {};
+            const pattern = _patternFrom(filters);
+            if (pattern !== undefined) query.keys = pattern;
+            // Bounds are passed through for the server to validate, so there is one
+            // definition of what counts as valid; a bad one comes back as a 400.
+            if (options.limit !== undefined) query.limit = options.limit;
+            if (options.offset !== undefined) query.offset = options.offset;
+            if (options.count) query.count = true;
+
             return this._request({
                 method: 'GET',
                 uri: '/cmd/keys',
-                query: { keys: tmp_filter }
+                query
             });
         }
 
@@ -330,6 +404,15 @@
                 }
             }
 
+            // Conditional headers. Read before _resetFlags() clears them, and only
+            // set when present so an unconditional request stays unconditional.
+            if (this.ifMatch !== null && this.ifMatch !== undefined) {
+                headers['If-Match'] = String(this.ifMatch);
+            }
+            if (this.ifNoneMatch !== null && this.ifNoneMatch !== undefined) {
+                headers['If-None-Match'] = String(this.ifNoneMatch);
+            }
+
             const wantsBinary = !!(config.query && config.query.binary);
             const method = (config.method || 'GET').toUpperCase();
             const url = new URL(
@@ -366,11 +449,16 @@
             }
 
             this._applyRenewedToken(response);
+            this._captureETag(response);
 
             if (!response.ok) {
                 const err = new Error(`API Error: ${response.status} ${response.statusText}`);
                 err.status = response.status;
                 err.details = await this._readBody(response, false);
+                // On a 412 the server reports the version it actually holds, both in
+                // the ETag header and as `current` in the body. Surfacing it on the
+                // error lets a caller retry straight away.
+                err.etag = this.lastEtag;
                 throw err;
             }
 
@@ -400,9 +488,24 @@
             }
         }
 
+        /**
+         * Remembers the ETag of this response. Always assigned, never left stale:
+         * a response without one means the key has no version to match against,
+         * and carrying the previous value forward would produce a wrong If-Match.
+         */
+        _captureETag(response) {
+            const headers = response && response.headers;
+            if (!headers) { this.lastEtag = null; return; }
+            this.lastEtag = (typeof headers.get === 'function'
+                ? headers.get('etag')
+                : (headers['etag'] || headers['ETag'])) || null;
+        }
+
         _resetFlags() {
             this.binary = false;
             this.overwriteKey = false;
+            this.ifMatch = null;
+            this.ifNoneMatch = null;
         }
 
         // Adopts the token the server issued for the next request, if any.

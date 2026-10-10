@@ -13,9 +13,26 @@ function tokenSeries() {
     return () => `test-token-${++n}`;
 }
 
+/** Mirrors the server's etagFor(): quoted _modCounter, null when absent. */
+function etagFor(doc) {
+    return doc === undefined ? null : `"${doc._modCounter || 0}"`;
+}
+
+/** Mirrors the server's etagMatches(): lenient on quoting and W/ prefixes. */
+function etagMatches(headerValue, currentEtag) {
+    const normalize = (v) => String(v).trim().replace(/^W\//i, '').replace(/^"|"$/g, '');
+    const raw = String(headerValue).trim();
+    if (raw === '*') return currentEtag !== null;
+    if (currentEtag === null) return false;
+    const current = normalize(currentEtag);
+    return raw.split(',').some(c => normalize(c) === current);
+}
+
 function createServer() {
     const nextToken = tokenSeries();
     const state = { lastRequest: null, requests: [] };
+    // Versioned documents for the conditional-request tests, keyed by path.
+    const docs = new Map();
 
     const server = http.createServer((req, res) => {
         const chunks = [];
@@ -100,6 +117,53 @@ function createServer() {
                 return; // never responds, for the timeout test
             }
 
+            // --- versioned keys, for conditional requests -----------------
+            if (req.url.startsWith('/keys/__versioned')) {
+                const path = req.url.split('?')[0];
+                const doc = docs.get(path);
+                const currentEtag = etagFor(doc);
+                const headers = { 'Content-Type': 'application/json', 'X-Renewed-Token': nextToken() };
+                if (currentEtag !== null) headers['ETag'] = currentEtag;
+
+                // Preconditions, evaluated the way the server does: If-Match
+                // first, and the ETag goes out even on the 412.
+                const ifMatch = req.headers['if-match'];
+                const ifNoneMatch = req.headers['if-none-match'];
+                if (ifMatch !== undefined) {
+                    if (!etagMatches(ifMatch, currentEtag)) {
+                        return send(412, headers, JSON.stringify({
+                            error: 'Precondition failed: the key has changed since the version supplied in If-Match',
+                            expected: ifMatch,
+                            current: currentEtag,
+                        }));
+                    }
+                } else if (ifNoneMatch !== undefined && etagMatches(ifNoneMatch, currentEtag)) {
+                    return send(412, headers, JSON.stringify({
+                        error: 'Precondition failed: the key matches If-None-Match',
+                        current: currentEtag,
+                    }));
+                }
+
+                if (req.method === 'GET') {
+                    if (doc === undefined) return send(404, headers, JSON.stringify({ error: 'Not found' }));
+                    return send(200, headers, JSON.stringify(doc.value));
+                }
+                if (req.method === 'PUT' || req.method === 'POST') {
+                    const next = {
+                        value: record.text ? JSON.parse(record.text) : null,
+                        _modCounter: (doc?._modCounter || 0) + 1,
+                    };
+                    docs.set(path, next);
+                    // The ETag of the version just written.
+                    headers['ETag'] = etagFor(next);
+                    return send(req.method === 'POST' ? 201 : 200, headers, JSON.stringify({ ok: 'success' }));
+                }
+                if (req.method === 'DELETE') {
+                    docs.delete(path);
+                    return send(200, headers, JSON.stringify({ ok: 'deleted' }));
+                }
+            }
+
             // --- normal echo, with a renewed token ------------------------
             const headers = { 'X-Renewed-Token': nextToken() };
             if (req.url.includes('binary=true')) {
@@ -121,6 +185,13 @@ function createServer() {
 
     return {
         state,
+        /** Simulates another client writing the key, bumping its version. */
+        bump(path, value = { by: 'another client' }) {
+            const doc = docs.get(path);
+            docs.set(path, { value, _modCounter: (doc?._modCounter || 0) + 1 });
+            return etagFor(docs.get(path));
+        },
+        docs,
         get lastRequest() { return state.lastRequest; },
         listen: () => new Promise(resolve =>
             server.listen(0, () => resolve(`http://127.0.0.1:${server.address().port}`))),

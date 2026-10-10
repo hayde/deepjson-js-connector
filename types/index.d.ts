@@ -65,6 +65,18 @@ export interface WhoamiResponse {
   [key: string]: unknown;
 }
 
+/**
+ * Body of a 412 Precondition Failed response. The thrown error also carries
+ * `status` (412) and `etag` (the server's current version).
+ */
+export interface PreconditionFailed {
+  error: string;
+  /** The value that was sent in If-Match, when that was the failing header. */
+  expected?: string;
+  /** The version the server actually holds, or null if the key is absent. */
+  current: string | null;
+}
+
 export interface RequestOptions {
   overwrite?: boolean;
 }
@@ -93,6 +105,24 @@ export class Connector {
   setBinary(value: boolean): this;
   isOverwriteKey(): boolean;
   setOverwriteKey(value: boolean): this;
+
+  // Optimistic concurrency
+  /**
+   * ETag of the most recent response, or null if it carried none. Set on
+   * reads, on writes (the version just written) and on a 412.
+   */
+  getETag(): string | null;
+  /**
+   * Sends If-Match on the next request only: the write proceeds only while the
+   * key is still at this version, else the server answers 412. '*' means
+   * "only if the key exists".
+   */
+  setIfMatch(etag: string | null): this;
+  /**
+   * Sends If-None-Match on the next request only. '*' is a conditional create,
+   * failing with 412 if the key already exists. If-Match wins if both are set.
+   */
+  setIfNoneMatch(etag: string | null): this;
 
   // CRUD
   get(key: string, value?: unknown, script?: string): Promise<unknown>;

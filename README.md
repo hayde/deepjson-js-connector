@@ -121,6 +121,70 @@ Notes:
   connection open for more than an hour without any intervening HTTP request has
   to be re-established via `reconnect()`.
 
+### Optimistic concurrency (ETag / If-Match)
+
+Per-key locking protects a single request, but not a read-modify-write split
+across two: another client can slip in between your read and your write. The
+server versions every document with an `ETag` and will refuse a write whose
+`If-Match` no longer matches, so the lost update becomes a visible `412`
+instead of silent data loss.
+
+```javascript
+const doc = await dj.get('reports.q3');
+const version = dj.getETag();          // e.g. '"7"'
+
+doc.total += 100;
+
+try {
+  await dj.setIfMatch(version).put('reports.q3', doc);
+  // landed - dj.getETag() is now the new version
+} catch (err) {
+  if (err.status === 412) {
+    // Someone else wrote first. err.etag is the version they left behind,
+    // so a retry needs no extra read.
+    console.log('current version is', err.etag, 'we had', version);
+  } else {
+    throw err;
+  }
+}
+```
+
+A read-modify-write loop can chain without re-reading, because a successful
+write returns the ETag of the version it just created:
+
+```javascript
+let version = dj.getETag();
+for (;;) {
+  try {
+    await dj.setIfMatch(version).put(key, next);
+    break;
+  } catch (err) {
+    if (err.status !== 412) throw err;
+    const fresh = await dj.get(key);   // reconcile against theirs
+    version = dj.getETag();
+    next = merge(fresh, mine);
+  }
+}
+```
+
+| Call | Meaning |
+|------|---------|
+| `dj.getETag()` | version of the last response, or `null` if it carried none |
+| `dj.setIfMatch(etag)` | write only while the key is still at `etag`, else 412 |
+| `dj.setIfMatch('*')` | write only if the key exists at all |
+| `dj.setIfNoneMatch('*')` | conditional create: write only if the key is absent |
+
+Both setters are **one-shot** - consumed by the next request and then cleared,
+like `setBinary()`. `If-Match` wins if both are set (RFC 9110 §13.2.2), and the
+server accepts a tag unquoted or with a `W/` prefix.
+
+`getETag()` is `null` after any response without an `ETag` - it is never left
+holding a previous key's version, which would send a wrong `If-Match`.
+
+> `setIfNoneMatch('*')` and `setOverwriteKey(false)` both guard against
+> clobbering an existing key on `post()`, but differ in the answer: the
+> conditional create fails with `412`, the overwrite flag with `400`.
+
 ### Identity & server info
 
 Both endpoints sit behind authentication, so each one doubles as a token check
@@ -401,6 +465,9 @@ const sync = new SyncConnector({ baseURL, io });
 | `.uploadFile(key, file)` | upload a file              |
 | `.version()`        | server version / heartbeat      |
 | `.whoami(keys?)`    | identity, groups, permissions    |
+| `.getETag()`        | version of the last response    |
+| `.setIfMatch(etag)` | conditional write (412 on conflict) |
+| `.setIfNoneMatch(etag)` | conditional create           |
 
 
 ## Upgrading from 1.x
