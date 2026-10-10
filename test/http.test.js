@@ -581,6 +581,102 @@ describe('flags', () => {
     });
 });
 
+describe('direct binary URLs', () => {
+    test('builds a self-authenticating URL', async () => {
+        const dj = await connected();
+        const url = new URL(dj.getBinaryURL('photos/sunset.jpg'));
+        assert.equal(url.pathname, '/keys/photos/sunset.jpg');
+        assert.equal(url.searchParams.get('binary'), 'true');
+        assert.equal(url.searchParams.get('token'), dj.getToken());
+    });
+
+    test('the URL actually serves the bytes with no Authorization header', async () => {
+        // The point of the query-string token: it works where no header can
+        // be set, so fetch it raw rather than through the connector.
+        const dj = await connected();
+        const res = await fetch(dj.getBinaryURL('photos/sunset.jpg'));
+        assert.equal(res.status, 200);
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        assert.deepEqual([...bytes], [0xde, 0xad, 0xbe, 0xef]);
+        assert.equal(server.lastRequest.headers.authorization, undefined,
+            'no Authorization header was involved');
+    });
+
+    test('accepts image modulation options', async () => {
+        const dj = await connected();
+        const url = new URL(dj.getBinaryURL('photos/sunset.jpg',
+            { width: 800, height: 600, fit: 'cover', format: 'jpeg', quality: 75 }));
+        assert.equal(url.searchParams.get('width'), '800');
+        assert.equal(url.searchParams.get('height'), '600');
+        assert.equal(url.searchParams.get('fit'), 'cover');
+        assert.equal(url.searchParams.get('format'), 'jpeg');
+        assert.equal(url.searchParams.get('quality'), '75');
+    });
+
+    test('rejects an unknown image option instead of ignoring it', async () => {
+        const dj = await connected();
+        // A typo must not silently produce an unmodified image.
+        assert.throws(() => dj.getBinaryURL('k', { widht: 800 }),
+            /Unknown image option "widht"/);
+    });
+
+    test('refuses to build a URL with no token', () => {
+        const dj = new Connector({ baseURL });
+        assert.throws(() => dj.getBinaryURL('k'), /needs a token/);
+    });
+
+    test('uses the current token, which rotates as requests are made', async () => {
+        const dj = await connected();
+        const first = dj.getBinaryURL('k');
+        await dj.get('something');                 // renews the token
+        const second = dj.getBinaryURL('k');
+        assert.notEqual(first, second, 'the URL tracks the current token');
+        assert.match(second, new RegExp('token=' + dj.getToken()));
+    });
+
+    test('honours a baseURL with a path prefix', async () => {
+        const dj = new Connector({ baseURL: baseURL + '/deepjson/', token: 'tok' });
+        const url = new URL(dj.getBinaryURL('a.b'));
+        assert.equal(url.pathname, '/deepjson/keys/a.b');
+    });
+});
+
+describe('image modulation on a binary read', () => {
+    test('setImageOptions adds the parameters to the request', async () => {
+        const dj = await connected();
+        dj.setBinary(true).setImageOptions({ width: 400, quality: 60 });
+        await dj.get('photos/sunset.jpg');
+        const url = new URL(server.lastRequest.url, 'http://localhost');
+        assert.equal(url.searchParams.get('binary'), 'true');
+        assert.equal(url.searchParams.get('width'), '400');
+        assert.equal(url.searchParams.get('quality'), '60');
+    });
+
+    test('is one-shot, like setBinary', async () => {
+        const dj = await connected();
+        dj.setBinary(true).setImageOptions({ width: 400 });
+        await dj.get('a.jpg');
+        assert.match(server.lastRequest.url, /width=400/);
+
+        dj.setBinary(true);
+        await dj.get('b.jpg');
+        assert.equal(/width=/.test(server.lastRequest.url), false, 'cleared');
+    });
+
+    test('validates eagerly, at the setter rather than the request', async () => {
+        const dj = await connected();
+        assert.throws(() => dj.setImageOptions({ quality: 60, nonsense: 1 }),
+            /Unknown image option "nonsense"/);
+    });
+
+    test('is ignored on a non-binary read', async () => {
+        const dj = await connected();
+        dj.setImageOptions({ width: 400 });
+        await dj.get('a.json');
+        assert.equal(/width=/.test(server.lastRequest.url), false);
+    });
+});
+
 describe('scripts', () => {
     test('a script is wrapped in the javascript: / javascript! envelope', async () => {
         const dj = await connected();

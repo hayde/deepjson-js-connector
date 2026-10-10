@@ -100,6 +100,18 @@ export interface ListKeysResult {
   truncated?: boolean;
 }
 
+/** Server-side image modulation parameters. */
+export interface ImageOptions {
+  width?: number;
+  height?: number;
+  fit?: 'cover' | 'contain' | string;
+  alignX?: 'left' | 'center' | 'right' | string;
+  alignY?: 'top' | 'center' | 'bottom' | string;
+  allowEnlarge?: boolean;
+  format?: 'jpeg' | 'png' | string;
+  quality?: number;
+}
+
 export interface RequestOptions {
   overwrite?: boolean;
 }
@@ -126,6 +138,21 @@ export class Connector {
   // Flags (chainable setters)
   isBinary(): boolean;
   setBinary(value: boolean): this;
+  /**
+   * Image modulation for the next binary read. One-shot, like setBinary().
+   * Throws on an unrecognised option.
+   */
+  setImageOptions(options: ImageOptions | null): this;
+  /**
+   * Direct, self-authenticating URL for a key's binary content, for use in an
+   * <img src>, <a href> or new tab where no Authorization header can be set.
+   *
+   * The token is embedded in the query string, so the URL is a bearer
+   * credential: it reaches browser history, logs and Referer headers, and it
+   * expires with that token. Build it at the point of use rather than storing
+   * it. Throws if no token is set.
+   */
+  getBinaryURL(key: string, options?: ImageOptions): string;
   isOverwriteKey(): boolean;
   setOverwriteKey(value: boolean): this;
 

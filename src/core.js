@@ -48,6 +48,29 @@ function _patternFrom(filters) {
     return String(filters);
 }
 
+/**
+ * Image modulation parameters the server understands (see
+ * _hasImageModulation): anything else is a typo rather than a feature, and
+ * silently dropping it would mean no resize and no error.
+ */
+const _IMAGE_PARAMS = [
+    'width', 'height', 'fit', 'alignX', 'alignY', 'allowEnlarge', 'format', 'quality'
+];
+
+function _imageParams(options) {
+    const out = {};
+    if (!options) return out;
+    for (const name of Object.keys(options)) {
+        if (!_IMAGE_PARAMS.includes(name)) {
+            throw new Error(
+                `Unknown image option "${name}". Valid options: ${_IMAGE_PARAMS.join(', ')}`
+            );
+        }
+        if (options[name] !== undefined && options[name] !== null) out[name] = options[name];
+    }
+    return out;
+}
+
 /** True for values we should JSON-encode rather than send verbatim. */
 function _isPlainPayload(data) {
     if (data === null || typeof data !== 'object') return false;
@@ -76,6 +99,9 @@ export class DeepJSONConnector {
 
         // ETag of the most recent response, or null if it carried none.
         this.lastEtag = null;
+
+        // One-shot image modulation for the next binary read.
+        this.imageOptions = null;
 
         this.isNode = _isNode;
 
@@ -160,6 +186,55 @@ export class DeepJSONConnector {
         this.binary = true_or_false
         return this;
     }
+
+    /**
+     * Server-side image modulation for the next binary read, e.g.
+     * setBinary(true).setImageOptions({ width: 800, format: 'jpeg' }).get(key)
+     *
+     * Valid options: width, height, fit, alignX, alignY, allowEnlarge, format,
+     * quality. One-shot, like setBinary(). Throws on an unrecognised option
+     * rather than quietly returning the unmodified image.
+     */
+    setImageOptions(options) {
+        _imageParams(options);          // validate now, not at request time
+        this.imageOptions = options || null;
+        return this;
+    }
+
+    /**
+     * Builds a direct, self-authenticating URL for a key's binary content -
+     * the thing you hand to an <img src>, <a href>, <video src> or a new tab,
+     * where no Authorization header can be set.
+     *
+     * The token travels in the query string, which is what makes the URL work
+     * on its own. Two consequences worth designing around:
+     *
+     *  - It is a bearer credential in a URL. It lands in browser history,
+     *    proxy and server logs, and any Referer header the page sends. Treat a
+     *    generated URL as secret: do not log it, persist it, or paste it.
+     *  - It stops working when the token expires - an hour from when that
+     *    token was issued, not from when the URL was built. Build it at the
+     *    point of use rather than caching it.
+     *
+     * Image modulation options are accepted here too, so a thumbnail can be
+     * served straight into an <img> without fetching the full-size original.
+     */
+    getBinaryURL(key, options = {}) {
+        if (!this.token) {
+            throw new Error(
+                'getBinaryURL() needs a token: the URL authenticates itself via ?token=. ' +
+                'Call login() or setToken() first.'
+            );
+        }
+        const url = new URL(
+            _buildFullPath(this.baseURL, `/keys/${key}`),
+            typeof location !== 'undefined' ? location.href : undefined
+        );
+        url.searchParams.set('binary', 'true');
+        url.searchParams.set('token', this.token);
+        _appendParams(url, _imageParams(options));
+        return url.toString();
+    }
     isOverwriteKey() {
         return this.overwriteKey
     }
@@ -219,6 +294,7 @@ export class DeepJSONConnector {
         if (this.binary) {
             params.binary = true;
             params.token = this.token;
+            Object.assign(params, _imageParams(this.imageOptions));
         }
         return this._request({
             method: httpMethod,
@@ -484,6 +560,7 @@ export class DeepJSONConnector {
         this.overwriteKey = false;
         this.ifMatch = null;
         this.ifNoneMatch = null;
+        this.imageOptions = null;
     }
 
     // Adopts the token the server issued for the next request, if any.

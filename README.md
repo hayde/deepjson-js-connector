@@ -373,13 +373,39 @@ const result = await dj.post('data.process', script);
 const fileInput = document.querySelector('input[type="file"]');
 await dj.uploadFile('documents/report.pdf', fileInput.files[0]);
 
-// Download image with processing
-const imgBlob = await dj.get('photos/sunset.jpg', {
-  binary: true,
-  width: 800,
-  quality: 75
-});
+// Download the bytes (resolves to an ArrayBuffer)
+const bytes = await dj.setBinary(true).get('photos/sunset.jpg');
+
+// Let the server resize/convert before sending
+const thumb = await dj
+  .setBinary(true)
+  .setImageOptions({ width: 800, format: 'jpeg', quality: 75 })
+  .get('photos/sunset.jpg');
 ```
+
+Image options: `width`, `height`, `fit`, `alignX`, `alignY`, `allowEnlarge`,
+`format`, `quality`. An unrecognised one throws rather than silently returning
+the untouched image. `setImageOptions()` is one-shot, like `setBinary()`.
+
+#### Direct URLs for binary content
+
+Some places take a URL and cannot send an `Authorization` header - `<img>`,
+`<a download>`, `<video>`, a new tab. `getBinaryURL()` builds a URL that
+authenticates itself, with the token in the query string:
+
+```javascript
+document.querySelector('img').src =
+  dj.getBinaryURL('photos/sunset.jpg', { width: 400, format: 'jpeg' });
+```
+
+> **A generated URL is a bearer credential.** The token is in the query, so the
+> URL grants whatever that token grants to anyone holding it. It ends up in
+> browser history, proxy and server logs, and any `Referer` header the page
+> sends. Do not log it, store it, or paste it into a ticket.
+>
+> It also **expires with the token** - an hour from when that token was issued,
+> not from when the URL was built. Build it at the point of use; a URL cached in
+> a database or a rendered template will start returning `401`.
 
 ### 4. Real-time Sync
 ```javascript
@@ -526,6 +552,8 @@ const sync = new SyncConnector({ baseURL, io });
 | `.getETag()`        | version of the last response    |
 | `.setIfMatch(etag)` | conditional write (412 on conflict) |
 | `.setIfNoneMatch(etag)` | conditional create           |
+| `.setImageOptions(opts)` | server-side resize/convert    |
+| `.getBinaryURL(key, opts?)` | direct URL for `<img>`/`<a>` |
 
 
 ## Upgrading from 1.x
