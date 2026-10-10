@@ -121,6 +121,64 @@ Notes:
   connection open for more than an hour without any intervening HTTP request has
   to be re-established via `reconnect()`.
 
+### Listing keys
+
+Key names are answered straight from the in-memory index, so a pattern over
+names costs nothing in document reads.
+
+```javascript
+// everything readable
+const { total, keys } = await dj.listKeys();
+
+// filtered - a string pattern or a RegExp
+const mine = await dj.listKeys('^de\\.acme\\.');
+const also = await dj.listKeys(/^de\.acme\./);
+
+// one page at a time
+const page = await dj.listKeys('^de\\.', { limit: 100, offset: 200 });
+
+// just the count, no keys transferred
+const { total: howMany } = await dj.listKeys('^de\\.', { count: true });
+```
+
+| Option | Meaning |
+|--------|---------|
+| `limit`, `offset` | Page through the result |
+| `count` | Return only `total`, with no key list |
+
+The result is `{ total, keys }`, plus `offset`, `limit` and `truncated` when
+paged. **`total` is always the full number of matches**, so it can be larger
+than `keys.length`.
+
+> **`truncated` matters even when you did not ask for a page.** An operator can
+> set `key_list_limit` in `dj.config` to cap every listing, so a plain
+> `listKeys()` may come back with only part of the keyspace - `limit` then
+> reports the ceiling the server applied. Treat a missing `truncated` as
+> complete and a `true` as "there is more":
+>
+> ```javascript
+> const all = [];
+> let offset = 0;
+> for (;;) {
+>   const page = await dj.listKeys(pattern, { offset });
+>   all.push(...page.keys);
+>   if (!page.truncated) break;
+>   offset += page.keys.length;
+> }
+> ```
+>
+> Before reaching for that loop, consider whether `{ count: true }` or a
+> narrower pattern answers the question instead - the cap exists so that one
+> client cannot pull the whole keyspace, and paging around it in a tight loop
+> defeats the point.
+
+A bad `limit`/`offset`, or a pattern that is not a valid regular expression,
+comes back as a `400` with the reason in `err.details.error`.
+
+Regex **flags are dropped**: the server compiles the pattern with
+`new RegExp(pattern)` and no flags, so `/^users\./i` is matched
+case-sensitively. Write the pattern so it does not need them.
+
 ### Optimistic concurrency (ETag / If-Match)
 
 Per-key locking protects a single request, but not a read-modify-write split
@@ -459,7 +517,7 @@ const sync = new SyncConnector({ baseURL, io });
 | `.put(key, value)`  | Update existing entry           |
 | `.move(from, to)`   | Move data between keys         |
 | `.sync()`           | Real-time operations            |
-| `.listKeys(regEx)`  | list keys            |
+| `.listKeys(pattern, opts?)` | list keys (`limit`/`offset`/`count`) |
 | `.getToken()`       | current JWT (auto-renewed)      |
 | `.setToken(token)`  | restore a persisted JWT         |
 | `.uploadFile(key, file)` | upload a file              |

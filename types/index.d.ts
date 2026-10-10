@@ -77,6 +77,29 @@ export interface PreconditionFailed {
   current: string | null;
 }
 
+/** Paging / counting options for listKeys(). */
+export interface ListKeysOptions {
+  /** Maximum keys to return. The server may clamp this to `key_list_limit`. */
+  limit?: number;
+  /** Zero-based index of the first key to return. */
+  offset?: number;
+  /** Return only `total`, with no key list. */
+  count?: boolean;
+}
+
+export interface ListKeysResult {
+  /** Full number of matches, independent of any paging. */
+  total: number;
+  /** The page of key names. Absent when `count: true` was requested. */
+  keys?: string[];
+  /** Echoed back when the result is paged. */
+  offset?: number;
+  /** The limit actually applied - may be the server's `key_list_limit`. */
+  limit?: number;
+  /** True when keys beyond this page remain. Check it before assuming `keys` is complete. */
+  truncated?: boolean;
+}
+
 export interface RequestOptions {
   overwrite?: boolean;
 }
@@ -133,7 +156,13 @@ export class Connector {
 
   // Files & keys
   uploadFile(key: string, file: File | string, options?: RequestOptions): Promise<unknown>;
-  listKeys(filters?: string | RegExp): Promise<unknown>;
+  /**
+   * Lists key names from the in-memory index. `total` is always the full
+   * match count, so it can exceed `keys.length` - and `truncated` can be true
+   * even for an unpaged call, because an operator can cap every listing with
+   * `key_list_limit` in the server config.
+   */
+  listKeys(filters?: string | RegExp, options?: ListKeysOptions): Promise<ListKeysResult>;
 }
 
 /**

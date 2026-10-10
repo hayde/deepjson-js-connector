@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { Connector } = require('../src/deepjson-connector.js');
-const { createServer, FAKE_TOKEN } = require('./helpers/http-server.js');
+const { createServer, FAKE_TOKEN, SAMPLE_KEYS } = require('./helpers/http-server.js');
 
 let server, baseURL;
 
@@ -348,6 +348,164 @@ describe('optimistic concurrency (ETag / If-Match)', () => {
     });
 });
 
+describe('listKeys', () => {
+    test('no filter lists every readable key with a total', async () => {
+        const dj = await connected();
+        const result = await dj.listKeys();
+        assert.equal(server.lastRequest.url, '/cmd/keys');
+        assert.equal(result.total, SAMPLE_KEYS.length);
+        assert.deepEqual(result.keys, SAMPLE_KEYS);
+    });
+
+    test('a string pattern filters', async () => {
+        const dj = await connected();
+        const result = await dj.listKeys('^users\\.');
+        assert.deepEqual(result.keys, ['users.alice', 'users.bob', 'users.carol']);
+        assert.equal(result.total, 3);
+    });
+
+    test('a RegExp contributes its source', async () => {
+        const dj = await connected();
+        const result = await dj.listKeys(/^reports\.2026\./);
+        assert.equal(decodeURIComponent(server.lastRequest.url), '/cmd/keys?keys=^reports\\.2026\\.');
+        assert.equal(result.total, 3);
+    });
+
+    test('a RegExp with flags is not mangled', async () => {
+        // Stringify-and-slice used to leave the trailing delimiter and the
+        // flags in the pattern: /^users\./i became "^users\./", which matches
+        // nothing here, silently and without an error.
+        const dj = await connected();
+        const result = await dj.listKeys(/^users\./i);
+        assert.equal(decodeURIComponent(server.lastRequest.url), '/cmd/keys?keys=^users\\.');
+        assert.equal(result.total, 3, 'still matches the three user keys');
+    });
+
+    test('limit and offset page through the result', async () => {
+        const dj = await connected();
+        const first = await dj.listKeys(undefined, { limit: 3, offset: 0 });
+        assert.equal(first.keys.length, 3);
+        assert.equal(first.total, SAMPLE_KEYS.length);
+        assert.equal(first.limit, 3);
+        assert.equal(first.offset, 0);
+        assert.equal(first.truncated, true, 'more remain');
+
+        const last = await dj.listKeys(undefined, { limit: 3, offset: 6 });
+        assert.deepEqual(last.keys, SAMPLE_KEYS.slice(6));
+        assert.equal(last.truncated, false, 'nothing left after this page');
+    });
+
+    test('total always reports the full match, not the page size', async () => {
+        const dj = await connected();
+        const page = await dj.listKeys('^users\\.', { limit: 1 });
+        assert.equal(page.keys.length, 1);
+        assert.equal(page.total, 3);
+    });
+
+    test('count returns only the total, with no keys', async () => {
+        const dj = await connected();
+        const result = await dj.listKeys('^public\\.', { count: true });
+        assert.match(decodeURIComponent(server.lastRequest.url), /count=true/);
+        assert.equal(result.total, 2);
+        assert.equal('keys' in result, false, 'no key list transferred');
+    });
+
+    test('an unpaged call sends no bounds', async () => {
+        const dj = await connected();
+        await dj.listKeys('^users\\.');
+        const url = server.lastRequest.url;
+        assert.equal(/limit=/.test(url), false);
+        assert.equal(/offset=/.test(url), false);
+        assert.equal(/count=/.test(url), false);
+    });
+
+    test('a bad bound is rejected by the server with 400', async () => {
+        const dj = await connected();
+        await assert.rejects(() => dj.listKeys(undefined, { limit: -1 }), (err) => {
+            assert.equal(err.status, 400);
+            assert.match(err.details.error, /"limit" must be a non-negative integer/);
+            return true;
+        });
+        await assert.rejects(() => dj.listKeys(undefined, { offset: 1.5 }), (err) => {
+            assert.equal(err.status, 400);
+            assert.match(err.details.error, /"offset" must be a non-negative integer/);
+            return true;
+        });
+    });
+
+    test('an invalid pattern is rejected with 400', async () => {
+        const dj = await connected();
+        await assert.rejects(() => dj.listKeys('^(unclosed'), (err) => {
+            assert.equal(err.status, 400);
+            assert.match(err.details.error, /not a valid regular expression/);
+            return true;
+        });
+    });
+});
+
+describe('key_list_limit (operator ceiling)', () => {
+    let capped, cappedURL;
+
+    before(async () => {
+        // An operator capping every listing at 2 keys.
+        capped = createServer({ keyListLimit: 2 });
+        cappedURL = await capped.listen();
+    });
+    after(async () => { await capped.close(); });
+
+    async function client() {
+        const dj = new Connector({ baseURL: cappedURL });
+        await dj.login('any-user', 'any-password');
+        return dj;
+    }
+
+    test('an unpaged listing is silently capped, but says so', async () => {
+        const dj = await client();
+        const result = await dj.listKeys();
+        assert.equal(result.keys.length, 2, 'capped to key_list_limit');
+        assert.equal(result.total, SAMPLE_KEYS.length, 'total still reports everything');
+        assert.equal(result.limit, 2, 'the server reports the ceiling it applied');
+        assert.equal(result.truncated, true, 'and flags that keys is incomplete');
+    });
+
+    test('a larger requested limit is clamped to the ceiling', async () => {
+        const dj = await client();
+        const result = await dj.listKeys(undefined, { limit: 100 });
+        assert.equal(result.keys.length, 2);
+        assert.equal(result.limit, 2);
+    });
+
+    test('a smaller requested limit is honoured', async () => {
+        const dj = await client();
+        const result = await dj.listKeys(undefined, { limit: 1 });
+        assert.equal(result.keys.length, 1);
+        assert.equal(result.limit, 1);
+    });
+
+    test('count is unaffected by the ceiling', async () => {
+        const dj = await client();
+        const result = await dj.listKeys(undefined, { count: true });
+        assert.equal(result.total, SAMPLE_KEYS.length);
+    });
+
+    test('paging past the ceiling reaches every key', async () => {
+        const dj = await client();
+        const collected = [];
+        let offset = 0;
+        // Bounded on purpose: if offset ever stops being sent, the same page
+        // comes back forever. A test that hangs is worse than one that fails.
+        const maxPages = Math.ceil(SAMPLE_KEYS.length / 2) + 2;
+        for (let page_n = 0; ; page_n++) {
+            assert.ok(page_n < maxPages, 'paging made no progress - is offset being sent?');
+            const page = await dj.listKeys(undefined, { offset });
+            collected.push(...page.keys);
+            if (!page.truncated) break;
+            offset += page.keys.length;
+        }
+        assert.deepEqual(collected, SAMPLE_KEYS);
+    });
+});
+
 describe('CRUD', () => {
     test('get issues a plain GET with no body', async () => {
         const dj = await connected();
@@ -394,17 +552,6 @@ describe('CRUD', () => {
         assert.deepEqual(JSON.parse(server.lastRequest.text), { from: 'a.old', to: 'a.new' });
     });
 
-    test('listKeys converts a RegExp to a bare pattern', async () => {
-        const dj = await connected();
-        await dj.listKeys(/^users\./);
-        assert.equal(decodeURIComponent(server.lastRequest.url), '/cmd/keys?keys=^users\\.');
-    });
-
-    test('listKeys without a filter sends no query', async () => {
-        const dj = await connected();
-        await dj.listKeys();
-        assert.equal(server.lastRequest.url, '/cmd/keys');
-    });
 });
 
 describe('flags', () => {

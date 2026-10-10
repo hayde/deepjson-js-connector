@@ -28,7 +28,62 @@ function etagMatches(headerValue, currentEtag) {
     return raw.split(',').some(c => normalize(c) === current);
 }
 
-function createServer() {
+/**
+ * Mirrors the server's handleListKeys(): same filtering order, same bound
+ * validation, same key_list_limit ceiling, same payload shape.
+ */
+function listKeys(source, allKeys, keyListLimit) {
+    const asBound = (value, name) => {
+        if (value === undefined || value === '') return undefined;
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < 0) {
+            return { error: `"${name}" must be a non-negative integer (got ${JSON.stringify(value)})` };
+        }
+        return n;
+    };
+
+    const offset = asBound(source.offset, 'offset');
+    if (offset && offset.error) return { status: 400, body: offset };
+    let limit = asBound(source.limit, 'limit');
+    if (limit && limit.error) return { status: 400, body: limit };
+
+    const maxLimit = Number(keyListLimit) || undefined;
+    if (maxLimit !== undefined) limit = limit === undefined ? maxLimit : Math.min(limit, maxLimit);
+
+    let keys = allKeys.slice();
+    if (source.keys) {
+        let matcher;
+        try { matcher = new RegExp(source.keys); }
+        catch (err) {
+            return { status: 400, body: { error: `"keys" is not a valid regular expression: ${err.message}` } };
+        }
+        keys = keys.filter(k => matcher.test(k));
+    }
+
+    const total = keys.length;
+    const countOnly = source.count === true || source.count === 'true' || source.count === '1';
+    if (countOnly) return { status: 200, body: { total } };
+
+    const start = offset || 0;
+    const page = limit === undefined ? keys.slice(start) : keys.slice(start, start + limit);
+
+    const body = { total, keys: page };
+    if (start > 0 || limit !== undefined) {
+        body.offset = start;
+        if (limit !== undefined) body.limit = limit;
+        body.truncated = start + page.length < total;
+    }
+    return { status: 200, body };
+}
+
+/** Deterministic keyspace for the listing tests. */
+const SAMPLE_KEYS = [
+    'users.alice', 'users.bob', 'users.carol',
+    'reports.2026.q1', 'reports.2026.q2', 'reports.2026.q3',
+    'public.notice', 'public.terms',
+];
+
+function createServer({ keyListLimit } = {}) {
     const nextToken = tokenSeries();
     const state = { lastRequest: null, requests: [] };
     // Versioned documents for the conditional-request tests, keyed by path.
@@ -117,6 +172,16 @@ function createServer() {
                 return; // never responds, for the timeout test
             }
 
+            // --- key listing ----------------------------------------------
+            if (req.url.split('?')[0].replace(/\/$/, '') === '/cmd/keys') {
+                const url = new URL(req.url, 'http://localhost');
+                const source = Object.fromEntries(url.searchParams.entries());
+                const result = listKeys(source, SAMPLE_KEYS, keyListLimit);
+                return send(result.status,
+                    { 'Content-Type': 'application/json', 'X-Renewed-Token': nextToken() },
+                    JSON.stringify(result.body));
+            }
+
             // --- versioned keys, for conditional requests -----------------
             if (req.url.startsWith('/keys/__versioned')) {
                 const path = req.url.split('?')[0];
@@ -199,4 +264,4 @@ function createServer() {
     };
 }
 
-module.exports = { createServer, FAKE_TOKEN };
+module.exports = { createServer, FAKE_TOKEN, SAMPLE_KEYS };
