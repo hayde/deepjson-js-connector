@@ -160,6 +160,14 @@ export interface AdminAPI {
   logs(): Promise<Array<Array<Record<string, unknown>>>>;
 }
 
+/**
+ * Outcome of a conditional read. Only one of the two outcomes has a body,
+ * which is why `value` is optional.
+ */
+export type ConditionalRead<T = unknown> =
+  | { changed: true; value: T; etag: string | null }
+  | { changed: false; value: undefined; etag: string | null };
+
 export interface RequestOptions {
   overwrite?: boolean;
 }
@@ -224,6 +232,16 @@ export class Connector {
 
   // CRUD
   get(key: string, value?: unknown, script?: string): Promise<unknown>;
+  /**
+   * Conditional read: returns `{ changed: false }` when the copy identified by
+   * `etag` is still current (the server answers 304), or
+   * `{ changed: true, value }` with the newer version. `etag` is always the
+   * server's current version, ready to pass back on the next call.
+   *
+   * Only a 304 is absorbed - 404, 403 and network failures still reject.
+   * Throws if `etag` is missing; use `get()` for an unconditional read.
+   */
+  getIfChanged<T = unknown>(key: string, etag: string): Promise<ConditionalRead<T>>;
   post(key: string, value: unknown, script?: string): Promise<unknown>;
   put(key: string, value: unknown, script?: string): Promise<unknown>;
   delete(key: string): Promise<unknown>;

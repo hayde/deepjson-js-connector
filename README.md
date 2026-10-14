@@ -179,6 +179,66 @@ Regex **flags are dropped**: the server compiles the pattern with
 `new RegExp(pattern)` and no flags, so `/^users\./i` is matched
 case-sensitively. Write the pattern so it does not need them.
 
+### Conditional reads (revalidating a cached copy)
+
+`If-None-Match` means two different things depending on the method, and the
+split matters. On a **write** it is the conditional create. On a **read** it is
+cache revalidation - "I already hold this version, has it changed?" - and the
+server answers `304 Not Modified` with no body when it has not
+([RFC 9110 §13.1.2](https://www.rfc-editor.org/rfc/rfc9110#section-13.1.2)).
+
+`getIfChanged()` wraps that, because a conditional read has two legitimate
+outcomes and only one of them has a body:
+
+```javascript
+const cached = store.get('doc.pdf');          // { value, etag }
+
+const result = await dj.getIfChanged('doc.pdf', cached.etag);
+if (result.changed) {
+  store.set('doc.pdf', { value: result.value, etag: result.etag });
+} else {
+  // 304 - what we already hold is current, nothing transferred
+}
+```
+
+`etag` always comes back as the server's current version, so it can be passed
+straight into the next call - which makes polling cheap:
+
+```javascript
+let etag = null;
+setInterval(async () => {
+  const r = etag ? await dj.getIfChanged(key, etag) : { changed: true, value: await dj.get(key) };
+  etag = r.etag ?? dj.getETag();
+  if (r.changed) render(r.value);
+}, 5000);
+```
+
+Only a `304` is absorbed. A `404`, `403` or network failure still throws, so a
+missing key does not quietly look like an unchanged one.
+
+It chains with the other read flags: `dj.setBinary(true).getIfChanged(key, etag)`.
+
+If you drive the header yourself with `setIfNoneMatch()` on `get()`, a `304`
+still arrives as a thrown error - `fetch` counts it as not-ok - but it is
+marked, so you can tell it from a real failure:
+
+```javascript
+try {
+  await dj.setIfNoneMatch(etag).get(key);
+} catch (err) {
+  if (err.notModified) { /* 304: cached copy is current */ }
+  else throw err;
+}
+```
+
+> **Browser caching is a server-side concern.** For a URL from
+> `getBinaryURL()` the browser makes the request, not the connector, so
+> nothing here influences it. ETags only help when a cache decides to
+> revalidate, and with no `Cache-Control` on the response that decision falls
+> to each cache's heuristics. If a replaced document is being served stale from
+> a browser cache, the fix is `Cache-Control: no-cache` on the server response,
+> not a client change.
+
 ### Optimistic concurrency (ETag / If-Match)
 
 Per-key locking protects a single request, but not a read-modify-write split
@@ -630,6 +690,7 @@ const sync = new SyncConnector({ baseURL, io });
 | `.uploadFile(key, file)` | upload a file              |
 | `.version()`        | server version / heartbeat      |
 | `.whoami(keys?)`    | identity, groups, permissions    |
+| `.getIfChanged(key, etag)` | conditional read (304-aware) |
 | `.getETag()`        | version of the last response    |
 | `.setIfMatch(etag)` | conditional write (412 on conflict) |
 | `.setIfNoneMatch(etag)` | conditional create           |

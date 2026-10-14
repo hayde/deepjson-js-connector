@@ -86,6 +86,32 @@ describe('build outputs', { skip: exists('lib/index.cjs') ? false : 'not built y
     });
 });
 
+describe('changelog', () => {
+    test('has an entry for the version being released', () => {
+        // Catches the easy miss: bumping the version and publishing without
+        // recording what changed.
+        const version = JSON.parse(read('package.json')).version;
+        const changelog = read('CHANGELOG.md');
+        assert.match(changelog, new RegExp(`^## \\[${version.replace(/\./g, '\\.')}\\]`, 'm'),
+            `CHANGELOG.md has no "## [${version}]" section`);
+    });
+
+    test('every released section is dated', () => {
+        const changelog = read('CHANGELOG.md');
+        const headings = [...changelog.matchAll(/^## \[([^\]]+)\](.*)$/gm)];
+        assert.ok(headings.length > 1, 'found version headings');
+        for (const [, version, rest] of headings) {
+            if (version === 'Unreleased') continue;
+            assert.match(rest, /\d{4}-\d{2}-\d{2}/, `"${version}" has no date`);
+        }
+    });
+
+    test('it ships with the package', () => {
+        const files = JSON.parse(read('package.json')).files;
+        assert.ok(files.includes('CHANGELOG.md'), 'CHANGELOG.md is in package.json "files"');
+    });
+});
+
 describe('no credentials in the repository', () => {
     // The tests authenticate against a stub that accepts anything, so nothing
     // resembling a real secret should ever be committed here.

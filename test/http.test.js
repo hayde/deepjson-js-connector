@@ -506,6 +506,117 @@ describe('key_list_limit (operator ceiling)', () => {
     });
 });
 
+describe('conditional reads (getIfChanged / 304)', () => {
+    const KEY = '__versioned/doc';
+    const PATH = '/keys/__versioned/doc';
+
+    test('reports a change and hands back the new value and version', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const stale = dj.getETag();
+        server.bump(PATH, { v: 2 });
+
+        const result = await dj.getIfChanged(KEY, stale);
+        assert.equal(result.changed, true);
+        assert.deepEqual(result.value, { v: 2 });
+        assert.notEqual(result.etag, stale, 'etag advanced');
+    });
+
+    test('reports no change without throwing, and carries no value', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const current = dj.getETag();
+
+        const result = await dj.getIfChanged(KEY, current);
+        assert.equal(result.changed, false);
+        assert.equal(result.value, undefined);
+        assert.equal(result.etag, current, 'etag echoed, usable as the next cursor');
+    });
+
+    test('sends If-None-Match, not If-Match', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const etag = dj.getETag();          // not a literal: the stub's counter
+        await dj.getIfChanged(KEY, etag);   // accumulates across tests
+        assert.equal(server.lastRequest.headers['if-none-match'], etag);
+        assert.equal(server.lastRequest.headers['if-match'], undefined);
+    });
+
+    test('the returned etag chains across repeated polls', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        let etag = dj.getETag();
+
+        let result = await dj.getIfChanged(KEY, etag);
+        assert.equal(result.changed, false);
+        etag = result.etag;
+
+        server.bump(PATH, { v: 'new' });
+        result = await dj.getIfChanged(KEY, etag);
+        assert.equal(result.changed, true);
+        assert.deepEqual(result.value, { v: 'new' });
+        etag = result.etag;
+
+        result = await dj.getIfChanged(KEY, etag);
+        assert.equal(result.changed, false, 'current again after catching up');
+    });
+
+    test('requires the etag of the copy you hold', async () => {
+        const dj = await connected();
+        for (const bad of [undefined, null, '']) {
+            await assert.rejects(() => dj.getIfChanged(KEY, bad),
+                /needs the ETag of the copy you already hold/, `for ${JSON.stringify(bad)}`);
+        }
+    });
+
+    test('errors other than 304 still propagate', async () => {
+        const dj = await connected();
+        await assert.rejects(() => dj.getIfChanged('../__/401', '"1"'), { status: 401 });
+        await assert.rejects(() => dj.getIfChanged('../__/500', '"1"'), { status: 500 });
+    });
+
+    test('chains with setBinary', async () => {
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        const result = await dj.setBinary(true).getIfChanged(KEY, '"does-not-match"');
+        assert.equal(result.changed, true);
+        assert.match(server.lastRequest.url, /binary=true/);
+    });
+
+    test('a manual setIfNoneMatch on get() still throws, but flags it', async () => {
+        // Unchanged behaviour for anyone driving the header directly - the 304
+        // is marked so it can be told apart from a real failure.
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        await assert.rejects(() => dj.setIfNoneMatch(dj.getETag()).get(KEY), (err) => {
+            assert.equal(err.status, 304);
+            assert.equal(err.notModified, true);
+            assert.equal(err.details, null, 'a 304 carries no body');
+            return true;
+        });
+    });
+
+    test('a 304 is not flagged on other failures', async () => {
+        const dj = await connected();
+        await assert.rejects(() => dj.get('../__/401'), (err) => {
+            assert.equal(err.notModified, undefined);
+            return true;
+        });
+    });
+
+    test("If-None-Match '*' on a write is still a 412, not a 304", async () => {
+        // The two meanings of the header: conditional create on a write stays
+        // a reportable failure.
+        const dj = await connected();
+        await dj.put(KEY, { v: 1 });
+        await assert.rejects(() => dj.setIfNoneMatch('*').put(KEY, { v: 2 }), (err) => {
+            assert.equal(err.status, 412);
+            assert.equal(err.notModified, undefined);
+            return true;
+        });
+    });
+});
+
 describe('CRUD', () => {
     test('get issues a plain GET with no body', async () => {
         const dj = await connected();

@@ -270,6 +270,16 @@ function createServer({ keyListLimit, isAdmin = true, accessFileValid = true } =
                         }));
                     }
                 } else if (ifNoneMatch !== undefined && etagMatches(ifNoneMatch, currentEtag)) {
+                    // RFC 9110 13.1.2, and what the server does: on a read a
+                    // match means "your copy is current" -> 304 with no body;
+                    // 412 only for the methods where it is a write precondition.
+                    if (req.method === 'GET' || req.method === 'HEAD') {
+                        // A 304 carries no body, so no Content-Type either -
+                        // only the validator and the renewed token.
+                        const { 'Content-Type': _dropped, ...rest } = headers;
+                        res.writeHead(304, rest);
+                        return res.end();
+                    }
                     return send(412, headers, JSON.stringify({
                         error: 'Precondition failed: the key matches If-None-Match',
                         current: currentEtag,

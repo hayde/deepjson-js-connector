@@ -311,6 +311,43 @@ export class DeepJSONConnector {
         });
     }
 
+    /**
+     * Conditional read: fetches the key only if it has changed since the
+     * version you already hold.
+     *
+     * A conditional read has two legitimate outcomes and only one of them has
+     * a body, which is why this does not go through get():
+     *
+     *   { changed: true,  value, etag }   // 200 - a newer version, here it is
+     *   { changed: false, value: undefined, etag }  // 304 - yours is current
+     *
+     * `etag` is always the server's current version, so it can be fed straight
+     * back in on the next call. Binary and image options chain as usual:
+     * dj.setBinary(true).getIfChanged(key, etag).
+     *
+     * Anything other than a 304 - 404, 403, a network failure - still throws.
+     */
+    async getIfChanged(key, etag) {
+        if (etag === undefined || etag === null || etag === '') {
+            throw new Error(
+                'getIfChanged(key, etag) needs the ETag of the copy you already hold. ' +
+                'Use get() for an unconditional read.'
+            );
+        }
+        this.setIfNoneMatch(etag);
+        try {
+            const value = await this.get(key);
+            return { changed: true, value, etag: this.lastEtag };
+        } catch (err) {
+            if (err.notModified) {
+                // The server sends the ETag on a 304 too; fall back to the one
+                // supplied if some intermediary stripped it.
+                return { changed: false, value: undefined, etag: this.lastEtag || etag };
+            }
+            throw err;
+        }
+    }
+
     async post(key, value, script = undefined) {
         const headers = {};
         if (this.overwriteKey) headers['X-Override-Existing'] = 'true';
@@ -604,6 +641,11 @@ export class DeepJSONConnector {
             // the ETag header and as `current` in the body. Surfacing it on the
             // error lets a caller retry straight away.
             err.etag = this.lastEtag;
+            // A 304 is a normal answer to a conditional read - "the copy you
+            // hold is current" - but fetch counts it as not-ok, so it arrives
+            // here. getIfChanged() turns it back into a result; this flag lets
+            // anyone calling setIfNoneMatch() on get() branch on it too.
+            if (response.status === 304) err.notModified = true;
             throw err;
         }
 
@@ -612,7 +654,8 @@ export class DeepJSONConnector {
 
     /** Decodes a response the way axios used to: JSON when it looks like JSON. */
     async _readBody(response, wantsBinary) {
-        if (response.status === 204) return null;
+        // 204 and 304 are both defined to carry no body at all.
+        if (response.status === 204 || response.status === 304) return null;
         if (wantsBinary) return response.arrayBuffer();
 
         const type = response.headers.get('content-type') || '';
