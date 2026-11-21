@@ -36,7 +36,7 @@ No axios, no socket.io-client, no CDN. See [Offline use](#offline-use).
 #### Node.js
 
 ```javascript
-const { Connector } = require('deepjson-client');
+const { Connector } = require('deepjson-connector');
 
 // Basic configuration
 const dj = new Connector({
@@ -70,7 +70,7 @@ const djAuthenticated = new DeepJSONConnector({
 });
 ```
 
-### Authentification
+### Authentication
 
 ```javascript
 // Basic username/password login
@@ -469,25 +469,35 @@ document.querySelector('img').src =
 
 ### 4. Real-time Sync
 ```javascript
-const syncConnector = new Connector.Sync({
+const { SyncConnector } = require('deepjson-connector');
+
+const syncConnector = new SyncConnector({
   baseURL: 'http://localhost:3000'
 });
+await syncConnector.login('username', 'password');
 
-// Join collaboration session
-await syncConnector.joinSession('design-session-12');
+// Start a session and share its channel id with the other participants...
+const channelId = await syncConnector.createSession();
 
-// Send real-time updates
+// ...who join it with that id instead:
+// await otherConnector.joinSession(channelId);
+
+// Receive updates
+syncConnector.on('canvas-update', (data) => {
+  renderCanvas(data);
+});
+
+// Send real-time updates to the other participants
 syncConnector.send('canvas-update', {
   x: 120,
   y: 45,
   color: '#ff0000'
 });
 
-// Receive updates
-syncConnector.on('canvas-update', (data) => {
-  renderCanvas(data);
-});
+syncConnector.disconnect();
 ```
+
+`SyncConnector` has every method of `Connector` as well.
 
 ## Advanced Features
 
@@ -679,11 +689,12 @@ const sync = new SyncConnector({ baseURL, io });
 
 | Method          | Description                         |
 |-----------------|-------------------------------------|
+| `.login(username, password)` | authenticate, stores the JWT |
 | `.get(key)`     | Retrieve data/File                  |
 | `.post(key, value)` | Create new entry               |
 | `.put(key, value)`  | Update existing entry           |
+| `.delete(key)`      | Delete an entry                 |
 | `.move(from, to)`   | Move data between keys         |
-| `.sync()`           | Real-time operations            |
 | `.listKeys(pattern, opts?)` | list keys (`limit`/`offset`/`count`) |
 | `.getToken()`       | current JWT (auto-renewed)      |
 | `.setToken(token)`  | restore a persisted JWT         |
@@ -696,6 +707,17 @@ const sync = new SyncConnector({ baseURL, io });
 | `.setIfNoneMatch(etag)` | conditional create           |
 | `.setImageOptions(opts)` | server-side resize/convert    |
 | `.getBinaryURL(key, opts?)` | direct URL for `<img>`/`<a>` |
+| `.admin.*`          | admin operations, see [Admin API](#admin-api) |
+
+`SyncConnector` only (realtime):
+
+| Method          | Description                         |
+|-----------------|-------------------------------------|
+| `.createSession()`  | open a session, resolves with its channel id |
+| `.joinSession(channelId)` | join an existing session   |
+| `.send(type, data)` | send a message to the session   |
+| `.on(type, callback)` / `.off(type, callback)` | subscribe / unsubscribe |
+| `.disconnect()` / `.reconnect()` | leave / rejoin the session |
 
 
 ## Upgrading from 1.x
